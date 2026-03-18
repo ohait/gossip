@@ -6,6 +6,11 @@ import (
 	"io"
 )
 
+const (
+	HandshakePrefix = "GOSSIP"   // 6-byte prefix sent by the client
+	Handshake       = "GOSSIP\n" // 7-byte ack sent by the server
+)
+
 func WriteBytes(f io.Writer, b []byte) error {
 	var lenBuf [8]byte
 	n := uint64(len(b))

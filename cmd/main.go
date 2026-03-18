@@ -16,8 +16,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	err = s.Bind(":7950")
-	if err != nil {
+	if _, err = s.Bind(":7950"); err != nil {
 		panic(err)
 	}
 

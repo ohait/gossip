@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
 )
 
 type Msg struct {
@@ -14,10 +15,11 @@ type Msg struct {
 }
 
 // Bind starts a TCP server on the specified address and listens for incoming connections.
-func (s *Service) Bind(addr string) error {
+// Returns the address actually bound (useful when addr is "host:0" for a random port).
+func (s *Service) Bind(addr string) (string, error) {
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return err
+		return "", err
 	}
 	go func() {
 		<-ShuttingDown
@@ -39,21 +41,68 @@ func (s *Service) Bind(addr string) error {
 			go s.handleConnection(conn)
 		}
 	})
+	return ln.Addr().String(), nil
+}
+
+func (s *Service) replay(since int64, conn net.Conn) error {
+	files := map[string]struct{}{}
+	s.m.Lock()
+	for _, entry := range s.index {
+		if entry.TS >= since {
+			files[entry.File] = struct{}{}
+		}
+	}
+	s.m.Unlock()
+	for file := range files {
+		f, err := os.Open(file)
+		if err != nil {
+			return err
+		}
+		l := &Log{path: file, f: f}
+		err = l.RangeSince(since, func(msg Msg) error {
+			err := WriteString(conn, msg.ID)
+			if err != nil {
+				return err
+			}
+			err = WriteInt64(conn, msg.TS)
+			if err != nil {
+				return err
+			}
+			err = WriteBytes(conn, msg.Data)
+			if err != nil {
+				return err
+			}
+			return nil
+		})
+		f.Close()
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
 func (s *Service) handleConnection(conn net.Conn) {
 	defer conn.Close()
-	// expect GOSSIP\n as the first bytes
-	buf := make([]byte, 7)
-	_, err := io.ReadFull(conn, buf)
-	if err != nil {
-		log.Printf("Error reading handshake: %v", err)
+	// expect GOSSIP<since:int64>
+	var prefix [len(HandshakePrefix)]byte
+	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
+		log.Printf("Error reading handshake prefix: %v", err)
 		return
 	}
-	if string(buf) != "GOSSIP\n" {
+	if string(prefix[:]) != HandshakePrefix {
 		conn.Write([]byte("Invalid handshake\n"))
-		log.Printf("Invalid handshake: %s", string(buf))
+		log.Printf("Invalid handshake prefix: %q", string(prefix[:]))
+		return
+	}
+	since, err := ReadInt64(conn)
+	if err != nil {
+		log.Printf("Error reading handshake ts: %v", err)
+		return
+	}
+	_, err = conn.Write([]byte(Handshake))
+	if err != nil {
+		log.Printf("Error writing handshake response: %v", err)
 		return
 	}
 	inbox := make(chan *Msg, 100)
@@ -67,6 +116,10 @@ func (s *Service) handleConnection(conn net.Conn) {
 			log.Printf("Closing connection to %s", conn.RemoteAddr().String())
 			conn.Close()
 		}()
+		if err := s.replay(since, conn); err != nil {
+			log.Printf("Error replaying messages: %v", err)
+			return
+		}
 		for {
 			select {
 			case msg, ok := <-inbox:

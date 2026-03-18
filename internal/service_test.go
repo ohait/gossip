@@ -109,7 +109,7 @@ func TestInitRebuildsIndex(t *testing.T) {
 			t.Errorf("missing index entry for %q after replay", m.ID)
 			continue
 		}
-		if entry.TS != int(m.TS) {
+		if entry.TS != m.TS {
 			t.Errorf("index[%q].TS = %d, want %d", m.ID, entry.TS, int(m.TS))
 		}
 	}

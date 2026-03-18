@@ -63,7 +63,7 @@ func (s *Service) Init() error {
 }
 
 type IndexEntry struct {
-	TS     int
+	TS     int64
 	File   string
 	Offset int64
 }
@@ -73,7 +73,7 @@ func (s *Service) Add(msg Msg) error {
 	defer s.m.Unlock()
 	prev := s.index[msg.ID]
 	if prev.File != "" {
-		if prev.TS >= int(msg.TS) {
+		if prev.TS >= msg.TS {
 			log.Printf("Duplicate message ID %s with older timestamp %d (existing TS: %d)\n", msg.ID, msg.TS, prev.TS)
 			return nil
 		}
@@ -91,6 +91,7 @@ func (s *Service) Add(msg Msg) error {
 		return err
 	}
 	if entry.Offset > 200*1024*1024 {
+		s.log.f.Sync()
 		s.log.f.Close()
 		s.log = nil
 	} else {

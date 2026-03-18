@@ -27,7 +27,7 @@ func TestAppendAndRead(t *testing.T) {
 	if entry.Offset != 0 {
 		t.Errorf("first entry offset = %d, want 0", entry.Offset)
 	}
-	if entry.TS != int(msg.TS) {
+	if entry.TS != msg.TS {
 		t.Errorf("entry.TS = %d, want %d", entry.TS, msg.TS)
 	}
 	if entry.File != l.path {

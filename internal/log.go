@@ -15,7 +15,7 @@ type Log struct {
 }
 
 func (l *Log) Append(msg Msg) (entry IndexEntry, err error) {
-	entry.TS = int(msg.TS)
+	entry.TS = msg.TS
 	entry.File = l.path
 	if len(msg.ID) > 256 {
 		return entry, fmt.Errorf("id length %d exceeds maximum allowed length 256", len(msg.ID))
@@ -83,6 +83,49 @@ func (l *Log) Read(offset int64) (msg Msg, err error) {
 	return
 }
 
+func (l *Log) RangeSince(since int64, f func(msg Msg) error) error {
+	l.f.Seek(0, io.SeekStart)
+	for {
+		id, err := ReadString(l.f, 256)
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return err
+		}
+		ts, err := ReadInt64(l.f)
+		if err != nil {
+			return err
+		}
+		hash, err := ReadUint64(l.f)
+		if err != nil {
+			return err
+		}
+		length, err := ReadUint64(l.f)
+		if err != nil {
+			return err
+		}
+		if length > 1024*1024*1024 {
+			return fmt.Errorf("data length %d exceeds maximum allowed length 1GB", length)
+		}
+		data := make([]byte, length)
+		_, err = io.ReadFull(l.f, data)
+		if err != nil {
+			return err
+		}
+		if verifyHash := xxhash.Sum64(data); verifyHash != hash {
+			return fmt.Errorf("data hash mismatch for %s: expected %016x, got %016x", id, hash, verifyHash)
+		}
+		if ts >= since {
+			err = f(Msg{ID: id, TS: ts, Data: data})
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (l *Log) Range(f func(id string, entry IndexEntry) error) error {
 	l.f.Seek(0, io.SeekStart)
 	for {
@@ -117,7 +160,7 @@ func (l *Log) Range(f func(id string, entry IndexEntry) error) error {
 			return err
 		}
 		err = f(id, IndexEntry{
-			TS:     int(ts),
+			TS:     ts,
 			File:   l.path,
 			Offset: offset,
 		})
