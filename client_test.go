@@ -1,6 +1,8 @@
 package gossip
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +20,8 @@ func TestE2E(t *testing.T) {
 	}
 
 	received := make(chan int.Msg, 1)
-	cli := &Client{
-		Addr:  addr,
+	cli := &TCPClient{
+		Addr: addr,
 		OnMessage: func(id string, ts int64, data []byte) error {
 			received <- int.Msg{ID: id, TS: ts, Data: data}
 			return nil
@@ -31,23 +33,39 @@ func TestE2E(t *testing.T) {
 	}
 	defer cli.Close()
 
-	// poll until the client has connected and the send succeeds
-	var sendErr error
-	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if sendErr = cli.Send("msg-1", 42, []byte("hello")); sendErr == nil {
-			break
-		}
-	}
-	if sendErr != nil {
-		t.Fatalf("Send: %v", sendErr)
+	largeJSON, err := json.Marshal(map[string]any{
+		"type":    "event",
+		"message": strings.Repeat("hello", 200),
+		"values":  []int64{1, 1, 1, 1, 1, 1, 1, 1},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	select {
-	case got := <-received:
-		if got.ID != "msg-1" || got.TS != 42 || string(got.Data) != "hello" {
-			t.Errorf("got {ID:%q TS:%d Data:%q}, want {ID:\"msg-1\" TS:42 Data:\"hello\"}", got.ID, got.TS, got.Data)
+	tests := []int.Msg{
+		{ID: "msg-1", TS: 42, Data: []byte("hello")},
+		{ID: "msg-2", TS: 43, Data: largeJSON},
+	}
+	for _, tt := range tests {
+		tt := tt
+		// poll until the client has connected and the send succeeds
+		var sendErr error
+		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if sendErr = cli.Send(tt.ID, tt.TS, tt.Data); sendErr == nil {
+				break
+			}
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for message to come back")
+		if sendErr != nil {
+			t.Fatalf("Send(%s): %v", tt.ID, sendErr)
+		}
+
+		select {
+		case got := <-received:
+			if got.ID != tt.ID || got.TS != tt.TS || string(got.Data) != string(tt.Data) {
+				t.Fatalf("got {ID:%q TS:%d Data:%q}, want {ID:%q TS:%d Data:%q}", got.ID, got.TS, got.Data, tt.ID, tt.TS, tt.Data)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for %s to come back", tt.ID)
+		}
 	}
 }

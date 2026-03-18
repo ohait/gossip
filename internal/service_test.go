@@ -115,6 +115,54 @@ func TestInitRebuildsIndex(t *testing.T) {
 	}
 }
 
+func TestInitKeepsHighestTSAcrossLogs(t *testing.T) {
+	dir := t.TempDir()
+
+	olderPath := dir + "/a-older.bin"
+	olderFile, err := os.Create(olderPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	olderLog := &Log{path: olderPath, f: olderFile}
+	if _, err := olderLog.Append(Msg{ID: "same", TS: 10, Data: []byte("older")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := olderFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	newerPath := dir + "/z-newer.bin"
+	newerFile, err := os.Create(newerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newerLog := &Log{path: newerPath, f: newerFile}
+	newerMsg := Msg{ID: "same", TS: 20, Data: []byte("newer")}
+	newerEntry, err := newerLog.Append(newerMsg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := newerFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Service{LogsFolder: dir}
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	entry, ok := s.index["same"]
+	if !ok {
+		t.Fatal("missing index entry after replay")
+	}
+	if entry.TS != newerMsg.TS {
+		t.Fatalf("entry.TS = %d, want %d", entry.TS, newerMsg.TS)
+	}
+	if entry.File != newerEntry.File || entry.Offset != newerEntry.Offset {
+		t.Fatalf("entry = %+v, want file=%q offset=%d", entry, newerEntry.File, newerEntry.Offset)
+	}
+}
+
 func TestInitIndexEntriesPointToReadableData(t *testing.T) {
 	dir := t.TempDir()
 

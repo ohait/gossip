@@ -41,6 +41,9 @@ func (s *Service) Init() error {
 	if err != nil {
 		return err
 	}
+	old := 0
+	tot := 0
+	t0 := time.Now()
 	for _, file := range files {
 		if filepath.Ext(file.Name()) == ".bin" {
 			path := filepath.Join(s.LogsFolder, file.Name())
@@ -50,7 +53,13 @@ func (s *Service) Init() error {
 			}
 			log := &Log{path: path, f: f}
 			err = log.Range(func(id string, entry IndexEntry) error {
-				s.index[id] = entry
+				prev, ok := s.index[id]
+				if !ok || entry.TS > prev.TS {
+					tot++
+					s.index[id] = entry
+				} else {
+					old++
+				}
 				return nil
 			})
 			f.Close()
@@ -59,6 +68,7 @@ func (s *Service) Init() error {
 			}
 		}
 	}
+	log.Printf("replayed %d messages (%d old) in %s\n", tot, old, time.Since(t0))
 	return nil
 }
 

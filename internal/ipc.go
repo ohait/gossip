@@ -2,6 +2,7 @@ package gossip
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -12,6 +13,54 @@ type Msg struct {
 	ID   string
 	TS   int64
 	Data []byte
+}
+
+func (m Msg) WriteTo(w io.Writer) (n int64, err error) {
+	_, err = w.Write([]byte{CmdMessage})
+	if err != nil {
+		return
+	}
+	err = WriteString(w, m.ID)
+	if err != nil {
+		return
+	}
+	err = WriteInt64(w, m.TS)
+	if err != nil {
+		return
+	}
+	err = WriteBytes(w, m.Data)
+	if err != nil {
+		return
+	}
+	return 1 + int64(len(m.ID)) + 8 + 8 + int64(len(m.Data)), nil
+}
+
+func (m *Msg) Decode(r io.Reader, skipCmd bool, maxSize int) (n int64, err error) {
+	if !skipCmd {
+		var cmd [1]byte
+		if _, err = io.ReadFull(r, cmd[:]); err != nil {
+			return
+		}
+		if cmd[0] != CmdMessage {
+			err = fmt.Errorf("unexpected command byte: %q", cmd[0])
+			return
+		}
+		n++
+	}
+	m.ID, err = ReadString(r, 256)
+	if err != nil {
+		return
+	}
+	m.TS, err = ReadInt64(r)
+	if err != nil {
+		return
+	}
+	m.Data, err = ReadBytes(r, maxSize)
+	if err != nil {
+		return
+	}
+	n = int64(len(m.ID)) + 8 + 8 + int64(len(m.Data))
+	return
 }
 
 // Bind starts a TCP server on the specified address and listens for incoming connections.
@@ -44,11 +93,13 @@ func (s *Service) Bind(addr string) (string, error) {
 	return ln.Addr().String(), nil
 }
 
-func (s *Service) replay(since int64, conn net.Conn) error {
+func (s *Service) replay(since int64, w io.Writer) error {
 	files := map[string]struct{}{}
+	ts := map[string]int64{}
 	s.m.Lock()
-	for _, entry := range s.index {
+	for id, entry := range s.index {
 		if entry.TS >= since {
+			ts[id] = entry.TS
 			files[entry.File] = struct{}{}
 		}
 	}
@@ -60,26 +111,19 @@ func (s *Service) replay(since int64, conn net.Conn) error {
 		}
 		l := &Log{path: file, f: f}
 		err = l.RangeSince(since, func(msg Msg) error {
-			err := WriteString(conn, msg.ID)
-			if err != nil {
-				return err
+			if msg.TS != ts[msg.ID] {
+				return nil // skip older versions of the same ID
 			}
-			err = WriteInt64(conn, msg.TS)
-			if err != nil {
-				return err
-			}
-			err = WriteBytes(conn, msg.Data)
-			if err != nil {
-				return err
-			}
-			return nil
+			_, err := msg.WriteTo(w)
+			return err
 		})
 		f.Close()
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	_, err := w.Write([]byte{CmdReplyDone})
+	return err
 }
 
 func (s *Service) handleConnection(conn net.Conn) {
@@ -127,19 +171,8 @@ func (s *Service) handleConnection(conn net.Conn) {
 					log.Printf("Inbox channel closed for %s", conn.RemoteAddr().String())
 					return
 				}
-				err := WriteString(conn, msg.ID)
-				if err != nil {
-					log.Printf("Error writing message ID: %v", err)
-					return
-				}
-				err = WriteInt64(conn, msg.TS)
-				if err != nil {
-					log.Printf("Error writing message TS: %v", err)
-					return
-				}
-				err = WriteBytes(conn, msg.Data)
-				if err != nil {
-					log.Printf("Error writing message data: %v", err)
+				if _, err := msg.WriteTo(conn); err != nil {
+					log.Printf("Error writing message: %v", err)
 					return
 				}
 			case <-ShuttingDown:
@@ -178,14 +211,6 @@ func (s *Service) handleConnection(conn net.Conn) {
 }
 
 func (s *Service) readRequest(conn io.Reader) (msg Msg, err error) {
-	msg.ID, err = ReadString(conn, 256)
-	if err != nil {
-		return
-	}
-	msg.TS, err = ReadInt64(conn)
-	if err != nil {
-		return
-	}
-	msg.Data, err = ReadBytes(conn, s.MaxData)
+	_, err = msg.Decode(conn, false, s.MaxData)
 	return
 }

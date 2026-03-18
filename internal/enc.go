@@ -9,6 +9,9 @@ import (
 const (
 	HandshakePrefix = "GOSSIP"   // 6-byte prefix sent by the client
 	Handshake       = "GOSSIP\n" // 7-byte ack sent by the server
+
+	CmdMessage   = byte('M') // message command byte
+	CmdReplyDone = byte('D')
 )
 
 func WriteBytes(f io.Writer, b []byte) error {
@@ -34,7 +37,7 @@ func ReadBytes(f io.Reader, maxLength int) ([]byte, error) {
 		return nil, err
 	}
 	n := binary.BigEndian.Uint64(lenBuf)
-	if n > uint64(maxLength) {
+	if maxLength > 0 && n > uint64(maxLength) {
 		return nil, fmt.Errorf("data length %d exceeds maximum allowed length %d", n, maxLength)
 	}
 	b := make([]byte, n)

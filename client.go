@@ -1,6 +1,8 @@
 package gossip
 
 import (
+	"bytes"
+	"compress/zlib"
 	"fmt"
 	"io"
 	"log"
@@ -13,7 +15,23 @@ import (
 	int "oha.it/gossip/internal"
 )
 
-type Client struct {
+const (
+	payloadEncodingRaw  = byte('=')
+	payloadEncodingZlib = byte('z')
+)
+
+type Client interface {
+	// Setup the client and reply the history, blocks until the replay is completed
+	Init() error
+
+	// Send writes a message to the log and broadcast to all the replicas, might block retrying if the log is not available.
+	Send(id string, ts int64, data []byte) error
+
+	// Close the client
+	Close() error
+}
+
+type TCPClient struct {
 	m     sync.Mutex
 	conn  net.Conn
 	close atomic.Bool
@@ -24,9 +42,12 @@ type Client struct {
 	ReplayMargin time.Duration // replay messages starting from LastTS-ReplayMargin; default 5s
 	LastTS       int64         // nanoseconds epoch: server will replay all messages with TS > Since - ReplayMargin
 	OnMessage    func(id string, ts int64, data []byte) error
+	replayErr    chan error
 }
 
-func (c *Client) Init() error {
+var _ Client = (*TCPClient)(nil)
+
+func (c *TCPClient) Init() error {
 	if c.done != nil {
 		return fmt.Errorf("client already initialized")
 	}
@@ -45,11 +66,14 @@ func (c *Client) Init() error {
 			log.Printf("gossip: "+format, args...)
 		}
 	}
+	c.replayErr = make(chan error)
 	go c.loop()
-	return nil
+	err := <-c.replayErr
+	c.replayErr = nil // disable for future reconnects
+	return err
 }
 
-func (c *Client) Close() error {
+func (c *TCPClient) Close() error {
 	if c.close.Swap(true) {
 		return os.ErrClosed
 	}
@@ -62,11 +86,15 @@ func (c *Client) Close() error {
 	return nil
 }
 
-func (c *Client) loop() {
+func (c *TCPClient) loop() {
 	for !c.close.Load() {
 		t0 := time.Now()
 		err := c.connectAndReceive()
 		c.Log("connection error: %v", err)
+		select {
+		case c.replayErr <- err:
+		default:
+		}
 		elapsed := time.Since(t0)
 		if elapsed < 5*time.Second {
 			select {
@@ -78,7 +106,7 @@ func (c *Client) loop() {
 	}
 }
 
-func (c *Client) connectAndReceive() error {
+func (c *TCPClient) connectAndReceive() error {
 	c.Log("Connecting to server at %s...", c.Addr)
 	conn, err := c.connect()
 	if err != nil {
@@ -89,33 +117,40 @@ func (c *Client) connectAndReceive() error {
 	c.m.Unlock()
 
 	defer conn.Close()
+	var cmd [1]byte
 	for {
-		id, err := int.ReadString(conn, 256)
+		_, err := io.ReadFull(conn, cmd[:])
 		if err != nil {
 			return err
 		}
-		ts, err := int.ReadInt64(conn)
-		if err != nil {
-			return err
-		}
-		data, err := int.ReadBytes(conn, 1024*1024*1024) // max 1GB (server might have a smaller limit)
-		if err != nil {
-			return err
-		}
-		if c.LastTS < ts {
-			c.LastTS = ts // move Since forward
-		}
-		onMessage := c.OnMessage
-		if onMessage != nil {
-			err := onMessage(id, ts, data)
+		switch cmd[0] {
+		case int.CmdReplyDone:
+			c.replayErr <- nil // signal success
+		case int.CmdMessage:
+			var msg int.Msg
+			if _, err := msg.Decode(conn, true, 0); err != nil {
+				return err
+			}
+			data, err := decodePayload(msg.Data)
 			if err != nil {
 				return err
+			}
+			id, ts := msg.ID, msg.TS
+			if c.LastTS < ts {
+				c.LastTS = ts // move Since forward
+			}
+			onMessage := c.OnMessage
+			if onMessage != nil {
+				err := onMessage(id, ts, data)
+				if err != nil {
+					return err
+				}
 			}
 		}
 	}
 }
 
-func (c *Client) connect() (net.Conn, error) {
+func (c *TCPClient) connect() (net.Conn, error) {
 	// TODO setup keepalive and no delay options to detect broken connections faster
 	conn, err := net.Dial("tcp", c.Addr)
 	if err != nil {
@@ -146,7 +181,7 @@ func (c *Client) connect() (net.Conn, error) {
 
 // Send writes a message to the server with automatic retry on failure.
 // TODO: accept a context.Context to allow cancellation during retries.
-func (c *Client) Send(id string, ts int64, data []byte) error {
+func (c *TCPClient) Send(id string, ts int64, data []byte) error {
 	var firstError error
 	for i := 1; i <= 5; i++ {
 		err := c.send(id, ts, data)
@@ -162,14 +197,18 @@ func (c *Client) Send(id string, ts int64, data []byte) error {
 			}
 			c.m.Unlock()
 		}
-		time.Sleep(time.Second * time.Duration(i*i)) // 1, 4, 9, 16, 25 seconds
+		time.Sleep(time.Second * time.Duration(i*i/2)) // 500ms, 2s, 4.5s, 8s, 12.5s (should be enough for a full restart of gossip server)
 	}
 	return fmt.Errorf("after 5 retries: %w", firstError)
 }
 
-func (c *Client) send(id string, ts int64, data []byte) error {
+func (c *TCPClient) send(id string, ts int64, data []byte) error {
 	if c.close.Load() {
 		return os.ErrClosed
+	}
+	data, err := encodePayload(data)
+	if err != nil {
+		return err
 	}
 	c.m.Lock()
 	defer c.m.Unlock()
@@ -177,14 +216,56 @@ func (c *Client) send(id string, ts int64, data []byte) error {
 	if conn == nil {
 		return fmt.Errorf("not connected")
 	}
-	if err := int.WriteString(conn, id); err != nil {
-		return err
+	_, err = int.Msg{ID: id, TS: ts, Data: data}.WriteTo(conn)
+	return err
+}
+
+func encodePayload(data []byte) ([]byte, error) {
+	var compressed bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&compressed, zlib.BestSpeed)
+	if err != nil {
+		return nil, err
 	}
-	if err := int.WriteInt64(conn, ts); err != nil {
-		return err
+	if _, err := zw.Write(data); err != nil {
+		zw.Close()
+		return nil, err
 	}
-	if err := int.WriteBytes(conn, data); err != nil {
-		return err
+	if err := zw.Close(); err != nil {
+		return nil, err
 	}
-	return nil
+	if compressed.Len() < len(data) {
+		out := make([]byte, 1+compressed.Len())
+		out[0] = payloadEncodingZlib
+		copy(out[1:], compressed.Bytes())
+		return out, nil
+	}
+	out := make([]byte, 1+len(data))
+	out[0] = payloadEncodingRaw
+	copy(out[1:], data)
+	return out, nil
+}
+
+func decodePayload(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("missing payload encoding")
+	}
+	switch data[0] {
+	case payloadEncodingRaw:
+		out := make([]byte, len(data)-1)
+		copy(out, data[1:])
+		return out, nil
+	case payloadEncodingZlib:
+		zr, err := zlib.NewReader(bytes.NewReader(data[1:]))
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+		out, err := io.ReadAll(zr)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unknown payload encoding %q", data[0])
+	}
 }

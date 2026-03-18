@@ -18,7 +18,7 @@ Each message is:
 - `TS int64`
 - `Data []byte`
 
-The message ID is the key. For a given ID, the newest timestamp wins.
+The message ID is the key. For a given ID, the newest timestamp wins logically.
 
 ## Timestamp
 
@@ -30,7 +30,7 @@ ts := time.Now().UnixNano()
 
 The code compares timestamps as plain `int64` values. If a message arrives for an existing ID and its timestamp is older or equal, it is ignored.
 
-For a given `id`, a newer event replaces the older one logically. Older versions may still exist on disk for now, but they are superseded and should not be treated as current state.
+For a given `id`, a newer event replaces the older one logically. Older versions may still exist, and replay may include older or duplicate entries, but the latest timestamp is the one that defines current state.
 
 ## Delete
 
@@ -54,6 +54,8 @@ That tombstone is stored in the log and broadcast like any other message. Consum
 4. The server replays messages with `ts >= since`.
 5. New incoming messages are appended to disk and broadcast to connected clients.
 
+Replay is not a strict "only the latest value per id" view. A client should expect to receive at least the latest event for each `id` in scope, but it may also receive older superseded events or duplicates.
+
 ## Future
 
 Compaction will be added soon.
@@ -66,7 +68,7 @@ For example, the system can:
 - join multiple logs into a new compacted log
 - remove old logs after the compacted replacement is safely written
 
-When compaction runs, it will keep only the newest event for each `id` in the compacted output. Older log files will then be replaced by the compacted ones.
+When compaction runs, it will keep the newest event for each `id` in the compacted output. Older log files will then be replaced by the compacted ones.
 
 A crash in the middle of compaction is acceptable. It may leave multiple copies of the same logical event across log files, but duplicate data is not a correctness problem for `gossip`. The next compaction pass can prune those extra copies.
 
