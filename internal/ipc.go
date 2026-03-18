@@ -131,6 +131,9 @@ func (s *Service) handleConnection(conn net.Conn) {
 	// expect GOSSIP<since:int64>
 	var prefix [len(HandshakePrefix)]byte
 	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
+		if err == io.EOF {
+			return
+		}
 		log.Printf("Error reading handshake prefix: %v", err)
 		return
 	}
