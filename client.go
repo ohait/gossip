@@ -77,6 +77,7 @@ func (c *TCPClient) Init() error {
 	go c.loop()
 	err := <-c.replayErr
 	if err != nil {
+		c.Close()
 		return err
 	}
 	c.Log("initial replay completed")
