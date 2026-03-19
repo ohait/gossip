@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -201,5 +202,39 @@ func TestSignalE2EAndNoReplay(t *testing.T) {
 	case <-replayed:
 		t.Fatal("transient send was replayed to a new client")
 	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+// TestInitErrorStopsLoop verifies that when Init() returns an error the
+// internal reconnect loop does not keep running in the background.
+func TestInitErrorStopsLoop(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	before := runtime.NumGoroutine()
+	cli := &TCPClient{
+		Addr:      ln.Addr().String(),
+		Timeout:   50 * time.Millisecond,
+		OnMessage: func(id string, ts int64, data []byte) error { return nil },
+	}
+	if err := cli.Init(); err == nil {
+		t.Fatal("Init() should have failed")
+	}
+
+	time.Sleep(100 * time.Millisecond) // let goroutines settle
+	if got := runtime.NumGoroutine(); got > before {
+		t.Errorf("goroutine leak: %d goroutines before Init(), %d after", before, got)
 	}
 }
