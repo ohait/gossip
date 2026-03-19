@@ -46,6 +46,7 @@ func (s *Service) Init() error {
 	old := 0
 	tot := 0
 	t0 := time.Now()
+	replayNow := t0.UnixNano()
 	for _, file := range files {
 		log.Printf("scanning %s\n", file.Name())
 		if filepath.Ext(file.Name()) == ".bin" {
@@ -54,14 +55,20 @@ func (s *Service) Init() error {
 			if err != nil {
 				return err
 			}
-			log := &Log{path: path, f: f}
-			err = log.Range(func(id string, entry IndexEntry) error {
+			lg := &Log{path: path, f: f}
+			err = lg.Range(func(id string, entry IndexEntry) error {
+				if entry.TS > replayNow {
+					log.Printf("message ID %s has future timestamp %d during replay (now: %d)\n", id, entry.TS, replayNow)
+				}
 				prev, ok := s.index[id]
-				if !ok || entry.TS > prev.TS {
+				if ok {
+					old++
+					if prev.TS <= entry.TS {
+						s.index[id] = entry
+					}
+				} else {
 					tot++
 					s.index[id] = entry
-				} else {
-					old++
 				}
 				return nil
 			})
@@ -84,6 +91,9 @@ type IndexEntry struct {
 func (s *Service) Add(msg Msg) error {
 	s.m.Lock()
 	defer s.m.Unlock()
+	if msg.TS >= time.Now().Add(time.Second).UnixNano() {
+		return fmt.Errorf("message timestamp %d is too far in the future", msg.TS)
+	}
 	prev := s.index[msg.ID]
 	if prev.File != "" {
 		if prev.TS >= msg.TS {

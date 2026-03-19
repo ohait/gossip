@@ -18,6 +18,7 @@ import (
 const (
 	payloadEncodingRaw  = byte('=') // TODO move to enc
 	payloadEncodingZlib = byte('z') // TODO move to enc
+	tcpKeepAlivePeriod  = 30 * time.Second
 )
 
 type Client interface {
@@ -70,7 +71,11 @@ func (c *TCPClient) Init() error {
 	c.replayErr = make(chan error)
 	go c.loop()
 	err := <-c.replayErr
-	return err
+	if err != nil {
+		return err
+	}
+	log.Printf("initial replay completed")
+	return nil
 }
 
 func (c *TCPClient) Close() error {
@@ -163,9 +168,24 @@ func (c *TCPClient) connectAndReceive() error {
 }
 
 func (c *TCPClient) connect() (net.Conn, error) {
-	// TODO setup keepalive and no delay options to detect broken connections faster
-	conn, err := net.Dial("tcp", c.Addr)
+	dialer := &net.Dialer{
+		KeepAlive: tcpKeepAlivePeriod,
+	}
+	conn, err := dialer.Dial("tcp", c.Addr)
 	if err != nil {
+		return nil, err
+	}
+	tcpConn, ok := conn.(*net.TCPConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("unexpected connection type %T", conn)
+	}
+	if err := tcpConn.SetKeepAlive(true); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := tcpConn.SetKeepAlivePeriod(tcpKeepAlivePeriod); err != nil {
+		conn.Close()
 		return nil, err
 	}
 	// send GOSSIP<since:int64>
@@ -188,6 +208,7 @@ func (c *TCPClient) connect() (net.Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("unexpected handshake response: %q", string(buf[:]))
 	}
+	log.Printf("Connected to server at %s, replaying messages since %d", c.Addr, c.LastTS)
 	return conn, nil
 }
 
