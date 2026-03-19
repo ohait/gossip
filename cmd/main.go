@@ -36,7 +36,7 @@ func main() {
 	log.Printf("listening on %s", lAddr)
 
 	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGQUIT)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGQUIT, syscall.SIGTERM)
 	log.Printf("press Ctrl+C to quit")
 	<-quit
 	close(gossip.ShuttingDown)
