@@ -15,8 +15,8 @@ type Service struct {
 	// TODO: this single mutex serializes replay-visible state, appends, and broadcasts.
 	// It is simple for now, but it will become a throughput bottleneck under write load.
 	m     sync.Mutex
-	index      map[string]IndexEntry
-	log        *Log
+	index map[string]IndexEntry
+	log   *Log
 
 	clients map[string]chan<- *Msg
 }
@@ -47,6 +47,7 @@ func (s *Service) Init() error {
 	tot := 0
 	t0 := time.Now()
 	for _, file := range files {
+		log.Printf("scanning %s\n", file.Name())
 		if filepath.Ext(file.Name()) == ".bin" {
 			path := filepath.Join(s.LogsFolder, file.Name())
 			f, err := os.Open(path)

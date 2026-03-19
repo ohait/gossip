@@ -10,6 +10,10 @@ Clients send messages with:
 
 The server appends each message to a binary log on disk and broadcasts it to connected clients. On startup, it replays the log files to rebuild its in-memory index.
 
+It's not meant to run in a distributed system, but just as an helper for applications that need a simple persistent pub/sub log.
+
+`gossip` does not index the data, or provide any querying capability. Just a simple log with replay and pub/sub. The clients are expected to maintain their own state based on the messages they receive.
+
 ## Message model
 
 Each message is:
@@ -46,17 +50,17 @@ Msg{
 
 That tombstone is stored in the log and broadcast like any other message. Consumers should treat `len(data) == 0` as deleted.
 
-## How it works
+## Replay
 
-1. A client connects to the TCP server.
-2. The client sends the `GOSSIP` handshake prefix and a `since` timestamp.
-3. The server replies with `GOSSIP\n`.
-4. The server replays messages with `ts >= since`.
-5. New incoming messages are appended to disk and broadcast to connected clients.
+On connection, the client sends the last known TS minus a small delta (e.g. 5 seconds).
 
-Replay is not a strict "only the latest value per id" view. A client should expect to receive at least the latest event for each `id` in scope, but it may also receive older superseded events or duplicates.
+The server will then replay messages with `ts >= (lastKnownTS - delta)`. This allows the client to catch up on recent changes while avoiding a large replay of old data.
+
+Replay is not a full-state snapshot. The server replays the latest known message for each `id` whose latest timestamp is within that replay window, and updates that happen during replay are then delivered on the live stream. Duplicates or older messages near the replay boundary are still possible.
 
 ## Future
+
+### Compaction
 
 Compaction will be added soon.
 
@@ -73,6 +77,12 @@ When compaction runs, it will keep the newest event for each `id` in the compact
 A crash in the middle of compaction is acceptable. It may leave multiple copies of the same logical event across log files, but duplicate data is not a correctness problem for `gossip`. The next compaction pass can prune those extra copies.
 
 That means older superseded versions are not part of the long-term retention model. They may exist temporarily before compaction, or temporarily after an interrupted compaction, but they should be treated as obsolete.
+
+Compaction might also remove old tombstone entries.
+
+### Querying
+
+There is no plan to add querying capabilities to the server, but we might allow late fetches of messages by ID.
 
 ## Notes
 
