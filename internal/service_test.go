@@ -200,3 +200,44 @@ func TestInitIndexEntriesPointToReadableData(t *testing.T) {
 		t.Errorf("got %+v, want %+v", got, want)
 	}
 }
+
+func TestInitFailsOnCorruptedLogData(t *testing.T) {
+	dir := t.TempDir()
+
+	s1 := &Service{LogsFolder: dir}
+	if err := s1.Init(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.Add(Msg{ID: "corrupt", TS: 1, Data: []byte("original data")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s1.log.f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(s1.log.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(s1.log.path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1)
+	corruptOffset := info.Size() - 1
+	if _, err := f.ReadAt(buf, corruptOffset); err != nil {
+		t.Fatal(err)
+	}
+	buf[0] ^= 0xFF
+	if _, err := f.WriteAt(buf, corruptOffset); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s2 := &Service{LogsFolder: dir}
+	if err := s2.Init(); err == nil {
+		t.Fatal("expected Init to fail on corrupted log data")
+	}
+}

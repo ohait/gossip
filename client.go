@@ -16,8 +16,8 @@ import (
 )
 
 const (
-	payloadEncodingRaw  = byte('=')
-	payloadEncodingZlib = byte('z')
+	payloadEncodingRaw  = byte('=') // TODO move to enc
+	payloadEncodingZlib = byte('z') // TODO move to enc
 )
 
 type Client interface {
@@ -36,13 +36,14 @@ type TCPClient struct {
 	conn  net.Conn
 	close atomic.Bool
 	done  chan struct{}
-	Log   func(format string, args ...any)
 
+	Log          func(format string, args ...any)
 	Addr         string
 	ReplayMargin time.Duration // replay messages starting from LastTS-ReplayMargin; default 5s
 	LastTS       int64         // nanoseconds epoch: server will replay all messages with TS > Since - ReplayMargin
 	OnMessage    func(id string, ts int64, data []byte) error
-	replayErr    chan error
+
+	replayErr chan error
 }
 
 var _ Client = (*TCPClient)(nil)
@@ -69,7 +70,6 @@ func (c *TCPClient) Init() error {
 	c.replayErr = make(chan error)
 	go c.loop()
 	err := <-c.replayErr
-	c.replayErr = nil // disable for future reconnects
 	return err
 }
 
@@ -90,10 +90,10 @@ func (c *TCPClient) loop() {
 	for !c.close.Load() {
 		t0 := time.Now()
 		err := c.connectAndReceive()
-		c.Log("connection error: %v", err)
 		select {
 		case c.replayErr <- err:
 		default:
+			c.Log("connection error: %v", err)
 		}
 		elapsed := time.Since(t0)
 		if elapsed < 5*time.Second {
@@ -116,19 +116,31 @@ func (c *TCPClient) connectAndReceive() error {
 	c.conn = conn
 	c.m.Unlock()
 
-	defer conn.Close()
+	defer func() {
+		c.m.Lock()
+		if c.conn == conn {
+			c.conn = nil
+		}
+		c.m.Unlock()
+		conn.Close()
+	}()
 	var cmd [1]byte
 	for {
+		conn.SetReadDeadline(time.Time{}) // no timeout between messages
 		_, err := io.ReadFull(conn, cmd[:])
 		if err != nil {
 			return err
 		}
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // timeout for the rest of the message after reading the command byte
 		switch cmd[0] {
 		case int.CmdReplyDone:
-			c.replayErr <- nil // signal success
+			select {
+			case c.replayErr <- nil:
+			default:
+			}
 		case int.CmdMessage:
 			var msg int.Msg
-			if _, err := msg.Decode(conn, true, 0); err != nil {
+			if _, err := msg.Decode(conn, 0); err != nil {
 				return err
 			}
 			data, err := decodePayload(msg.Data)
@@ -190,13 +202,12 @@ func (c *TCPClient) Send(id string, ts int64, data []byte) error {
 		}
 		if firstError == nil {
 			firstError = err
-		} else {
-			c.m.Lock()
-			if c.conn != nil {
-				c.conn.Close() // force reconnect
-			}
-			c.m.Unlock()
 		}
+		c.m.Lock()
+		if c.conn != nil {
+			c.conn.Close() // force reconnect after any write error
+		}
+		c.m.Unlock()
 		time.Sleep(time.Second * time.Duration(i*i/2)) // 500ms, 2s, 4.5s, 8s, 12.5s (should be enough for a full restart of gossip server)
 	}
 	return fmt.Errorf("after 5 retries: %w", firstError)
@@ -220,6 +231,7 @@ func (c *TCPClient) send(id string, ts int64, data []byte) error {
 	return err
 }
 
+// TODO move to enc
 func encodePayload(data []byte) ([]byte, error) {
 	var compressed bytes.Buffer
 	zw, err := zlib.NewWriterLevel(&compressed, zlib.BestSpeed)
@@ -245,6 +257,7 @@ func encodePayload(data []byte) ([]byte, error) {
 	return out, nil
 }
 
+// TODO move to enc
 func decodePayload(data []byte) ([]byte, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("missing payload encoding")

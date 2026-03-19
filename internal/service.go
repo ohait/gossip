@@ -12,7 +12,9 @@ import (
 type Service struct {
 	LogsFolder string
 	MaxData    int
-	m          sync.Mutex
+	// TODO: this single mutex serializes replay-visible state, appends, and broadcasts.
+	// It is simple for now, but it will become a throughput bottleneck under write load.
+	m     sync.Mutex
 	index      map[string]IndexEntry
 	log        *Log
 

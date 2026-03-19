@@ -2,11 +2,11 @@ package gossip
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
 	"os"
+	"time"
 )
 
 type Msg struct {
@@ -35,18 +35,7 @@ func (m Msg) WriteTo(w io.Writer) (n int64, err error) {
 	return 1 + int64(len(m.ID)) + 8 + 8 + int64(len(m.Data)), nil
 }
 
-func (m *Msg) Decode(r io.Reader, skipCmd bool, maxSize int) (n int64, err error) {
-	if !skipCmd {
-		var cmd [1]byte
-		if _, err = io.ReadFull(r, cmd[:]); err != nil {
-			return
-		}
-		if cmd[0] != CmdMessage {
-			err = fmt.Errorf("unexpected command byte: %q", cmd[0])
-			return
-		}
-		n++
-	}
+func (m *Msg) Decode(r io.Reader, maxSize int) (n int64, err error) {
 	m.ID, err = ReadString(r, 256)
 	if err != nil {
 		return
@@ -93,7 +82,7 @@ func (s *Service) Bind(addr string) (string, error) {
 	return ln.Addr().String(), nil
 }
 
-func (s *Service) replay(since int64, w io.Writer) error {
+func (s *Service) replay(since int64, conn net.Conn) error {
 	files := map[string]struct{}{}
 	ts := map[string]int64{}
 	s.m.Lock()
@@ -114,7 +103,8 @@ func (s *Service) replay(since int64, w io.Writer) error {
 			if msg.TS != ts[msg.ID] {
 				return nil // skip older versions of the same ID
 			}
-			_, err := msg.WriteTo(w)
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_, err := msg.WriteTo(conn)
 			return err
 		})
 		f.Close()
@@ -122,14 +112,18 @@ func (s *Service) replay(since int64, w io.Writer) error {
 			return err
 		}
 	}
-	_, err := w.Write([]byte{CmdReplyDone})
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	_, err := conn.Write([]byte{CmdReplyDone})
 	return err
 }
 
 func (s *Service) handleConnection(conn net.Conn) {
 	defer conn.Close()
+
 	// expect GOSSIP<since:int64>
 	var prefix [len(HandshakePrefix)]byte
+	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
 		if err == io.EOF {
 			return
@@ -174,6 +168,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 					log.Printf("Inbox channel closed for %s", conn.RemoteAddr().String())
 					return
 				}
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				if _, err := msg.WriteTo(conn); err != nil {
 					log.Printf("Error writing message: %v", err)
 					return
@@ -193,27 +188,39 @@ func (s *Service) handleConnection(conn net.Conn) {
 		close(inbox) // close the inbox channel to signal the spooler goroutine to exit
 	}()
 	for {
-		msg, err := s.readRequest(conn)
+		conn.SetReadDeadline(time.Time{}) // not timeout between messages
+		var cmd [1]byte
+		_, err = io.ReadFull(conn, cmd[:])
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				log.Printf("Client %s disconnected", conn.RemoteAddr().String())
+			return
+		}
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // timeout for the rest of the message after reading the command byte
+		switch cmd[0] {
+		case CmdMessage:
+			var msg Msg
+			if _, err := msg.Decode(conn, s.MaxData); err != nil {
+				if errors.Is(err, io.EOF) {
+					log.Printf("Client %s disconnected", conn.RemoteAddr().String())
+				} else {
+					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+					conn.Write([]byte("Error decoding message\n"))
+					log.Printf("Error decoding message: %v", err)
+				}
 				return
 			}
-			conn.Write([]byte("Error reading request\n"))
-			log.Printf("Error reading request: %v", err)
+			err = s.Add(msg)
+			if err != nil {
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				conn.Write([]byte("Error adding message\n"))
+				log.Printf("Error adding message: %v", err)
+				return
+			}
+			log.Printf("Added message: ID=%s, TS=%d, DataSize=%d", msg.ID, msg.TS, len(msg.Data))
+		default:
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			conn.Write([]byte("Unknown command\n"))
+			log.Printf("Unknown command byte: %q", cmd[0])
 			return
 		}
-		err = s.Add(msg)
-		if err != nil {
-			conn.Write([]byte("Error adding message\n"))
-			log.Printf("Error adding message: %v", err)
-			return
-		}
-		log.Printf("Added message: ID=%s, TS=%d, DataSize=%d", msg.ID, msg.TS, len(msg.Data))
 	}
-}
-
-func (s *Service) readRequest(conn io.Reader) (msg Msg, err error) {
-	_, err = msg.Decode(conn, false, s.MaxData)
-	return
 }
