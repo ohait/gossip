@@ -79,9 +79,9 @@ func TestAddEqualTSIgnored(t *testing.T) {
 
 func TestSignalBroadcastsWithoutPersisting(t *testing.T) {
 	s := newTestService(t)
-	inbox := make(chan outboundMsg, 1)
+	inbox := make(chan Outbound, 1)
 	s.m.Lock()
-	s.clients["test"] = inbox
+	s.Clients["test"] = inbox
 	s.m.Unlock()
 
 	msg := Msg{ID: "sig-1", TS: 100, Data: []byte("hello")}
@@ -91,11 +91,11 @@ func TestSignalBroadcastsWithoutPersisting(t *testing.T) {
 
 	select {
 	case got := <-inbox:
-		if got.cmd != CmdSignal {
-			t.Fatalf("cmd = %q, want %q", got.cmd, CmdSignal)
+		if got.Cmd != CmdSignal {
+			t.Fatalf("cmd = %q, want %q", got.Cmd, CmdSignal)
 		}
-		if got.msg.ID != msg.ID || got.msg.TS != msg.TS || string(got.msg.Data) != string(msg.Data) {
-			t.Fatalf("got %+v, want %+v", got.msg, msg)
+		if got.Msg.ID != msg.ID || got.Msg.TS != msg.TS || string(got.Msg.Data) != string(msg.Data) {
+			t.Fatalf("got %+v, want %+v", got.Msg, msg)
 		}
 	default:
 		t.Fatal("signal was not broadcast")
@@ -126,7 +126,7 @@ func TestInitRebuildsIndex(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	s1.log.f.Close()
+	s1.log.Close()
 
 	s2 := &Service{LogsFolder: dir}
 	if err := s2.Init(); err != nil {
@@ -155,7 +155,7 @@ func TestInitKeepsHighestTSAcrossLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	olderLog := &Log{path: olderPath, f: olderFile}
+	olderLog := NewLog(olderFile)
 	if _, err := olderLog.Append(Msg{ID: "same", TS: 10, Data: []byte("older")}); err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func TestInitKeepsHighestTSAcrossLogs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerLog := &Log{path: newerPath, f: newerFile}
+	newerLog := NewLog(newerFile)
 	newerMsg := Msg{ID: "same", TS: 20, Data: []byte("newer")}
 	newerEntry, err := newerLog.Append(newerMsg)
 	if err != nil {
@@ -222,7 +222,7 @@ func TestInitIndexEntriesPointToReadableData(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer osf.Close()
-	f := &Log{path: entry.File, f: osf}
+	f := NewLog(osf)
 
 	got, err := f.Read(entry.Offset)
 	if err != nil {

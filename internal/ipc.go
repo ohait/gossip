@@ -106,7 +106,7 @@ func (s *Service) replay(since int64, conn net.Conn) error {
 		if err != nil {
 			return err
 		}
-		l := &Log{path: file, f: f}
+		l := NewLog(f)
 		err = l.RangeSince(since, func(msg Msg) error {
 			if msg.TS != ts[msg.ID] {
 				return nil // skip older versions of the same ID
@@ -154,9 +154,9 @@ func (s *Service) handleConnection(conn net.Conn) {
 		log.Printf("Error writing handshake response: %v", err)
 		return
 	}
-	inbox := make(chan outboundMsg, 100)
+	inbox := make(chan Outbound, 100)
 	s.m.Lock()
-	s.clients[conn.RemoteAddr().String()] = inbox
+	s.Clients[conn.RemoteAddr().String()] = inbox
 	s.m.Unlock()
 
 	// spool messages to the client in a separate goroutine
@@ -178,11 +178,11 @@ func (s *Service) handleConnection(conn net.Conn) {
 				}
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				var err error
-				switch item.cmd {
+				switch item.Cmd {
 				case CmdSignal:
-					_, err = item.msg.WriteSignalTo(conn)
+					_, err = item.Msg.WriteSignalTo(conn)
 				default:
-					_, err = item.msg.WriteTo(conn)
+					_, err = item.Msg.WriteTo(conn)
 				}
 				if err != nil {
 					log.Printf("Error writing message: %v", err)
@@ -198,7 +198,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 	defer func() {
 		s.m.Lock()
 		log.Printf("Removing client %s", conn.RemoteAddr().String())
-		delete(s.clients, conn.RemoteAddr().String())
+		delete(s.Clients, conn.RemoteAddr().String())
 		s.m.Unlock()
 		close(inbox) // close the inbox channel to signal the spooler goroutine to exit
 	}()

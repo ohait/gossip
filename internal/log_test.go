@@ -11,7 +11,7 @@ func newTestLog(t *testing.T) (*Log, func()) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := &Log{path: f.Name(), f: f}
+	l := NewLog(f)
 	return l, func() { f.Close() }
 }
 

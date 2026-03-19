@@ -14,6 +14,10 @@ type Log struct {
 	f    *os.File
 }
 
+func NewLog(f *os.File) *Log {
+	return &Log{path: f.Name(), f: f}
+}
+
 func (l *Log) readNext() (offset int64, msg Msg, err error) {
 	offset, err = l.f.Seek(0, io.SeekCurrent)
 	if err != nil {
@@ -48,6 +52,14 @@ func (l *Log) readNext() (offset int64, msg Msg, err error) {
 		err = fmt.Errorf("data hash mismatch for %s: expected %016x, got %016x", msg.ID, hash, verifyHash)
 	}
 	return
+}
+
+func (l *Log) Close() error {
+	return l.f.Close()
+}
+
+func (l *Log) Flush() error {
+	return l.f.Sync()
 }
 
 func (l *Log) Append(msg Msg) (entry IndexEntry, err error) {

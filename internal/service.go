@@ -18,17 +18,17 @@ type Service struct {
 	index map[string]IndexEntry
 	log   *Log
 
-	clients map[string]chan<- outboundMsg
+	Clients map[string]chan<- Outbound
 }
 
-type outboundMsg struct {
-	cmd byte
-	msg Msg
+type Outbound struct {
+	Cmd byte
+	Msg Msg
 }
 
 func (s *Service) Init() error {
 	s.index = make(map[string]IndexEntry)
-	s.clients = make(map[string]chan<- outboundMsg)
+	s.Clients = make(map[string]chan<- Outbound)
 	if s.LogsFolder == "" {
 		s.LogsFolder = "logs"
 	}
@@ -118,12 +118,10 @@ func (s *Service) Add(msg Msg) error {
 	if err != nil {
 		return err
 	}
+	s.log.Flush()
 	if entry.Offset > 200*1024*1024 {
-		s.log.f.Sync()
-		s.log.f.Close()
+		s.log.Close()
 		s.log = nil
-	} else {
-		s.log.f.Sync() // Ensure data is flushed to disk
 	}
 	//prev := s.index[id]
 	//if prev.File != "" {
@@ -157,9 +155,9 @@ func validateMsg(msg Msg) error {
 }
 
 func (s *Service) broadcast(cmd byte, msg Msg) {
-	for _, inbox := range s.clients {
+	for _, inbox := range s.Clients {
 		select {
-		case inbox <- outboundMsg{cmd: cmd, msg: msg}:
+		case inbox <- Outbound{Cmd: cmd, Msg: msg}:
 		default:
 		}
 	}
