@@ -2,6 +2,8 @@ package gossip
 
 import (
 	"encoding/json"
+	"errors"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -67,5 +69,63 @@ func TestE2E(t *testing.T) {
 		case <-time.After(2 * time.Second):
 			t.Fatalf("timed out waiting for %s to come back", tt.ID)
 		}
+	}
+}
+
+func TestClientInitTimeout(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	accepted := make(chan struct{})
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		close(accepted)
+		select {}
+	}()
+
+	cli := &TCPClient{
+		Addr:    ln.Addr().String(),
+		Timeout: 50 * time.Millisecond,
+		OnMessage: func(id string, ts int64, data []byte) error {
+			return nil
+		},
+	}
+
+	err = cli.Init()
+	if err == nil {
+		t.Fatal("Init() unexpectedly succeeded")
+	}
+	<-accepted
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("Init() error = %v, want timeout", err)
+	}
+}
+
+func TestClientSendTimeout(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	cli := &TCPClient{
+		Timeout: 50 * time.Millisecond,
+		conn:    clientConn,
+	}
+
+	data := make([]byte, 1<<20)
+	err := cli.send("msg-1", 1, data)
+	if err == nil {
+		t.Fatal("send() unexpectedly succeeded")
+	}
+	var netErr net.Error
+	if !errors.As(err, &netErr) || !netErr.Timeout() {
+		t.Fatalf("send() error = %v, want timeout", err)
 	}
 }

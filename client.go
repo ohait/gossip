@@ -19,6 +19,7 @@ const (
 	payloadEncodingRaw  = byte('=') // TODO move to enc
 	payloadEncodingZlib = byte('z') // TODO move to enc
 	tcpKeepAlivePeriod  = 30 * time.Second
+	defaultTimeout      = 10 * time.Second
 )
 
 type Client interface {
@@ -40,6 +41,7 @@ type TCPClient struct {
 
 	Log          func(format string, args ...any)
 	Addr         string
+	Timeout      time.Duration // per network operation; default 10s
 	ReplayMargin time.Duration // replay messages starting from LastTS-ReplayMargin; default 5s
 	LastTS       int64         // nanoseconds epoch: server will replay all messages with TS > Since - ReplayMargin
 	OnMessage    func(id string, ts int64, data []byte) error
@@ -74,7 +76,7 @@ func (c *TCPClient) Init() error {
 	if err != nil {
 		return err
 	}
-	log.Printf("initial replay completed")
+	c.Log("initial replay completed")
 	return nil
 }
 
@@ -136,7 +138,7 @@ func (c *TCPClient) connectAndReceive() error {
 		if err != nil {
 			return err
 		}
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // timeout for the rest of the message after reading the command byte
+		conn.SetReadDeadline(time.Now().Add(c.timeout())) // timeout for the rest of the message after reading the command byte
 		switch cmd[0] {
 		case int.CmdReplyDone:
 			select {
@@ -170,6 +172,7 @@ func (c *TCPClient) connectAndReceive() error {
 func (c *TCPClient) connect() (net.Conn, error) {
 	dialer := &net.Dialer{
 		KeepAlive: tcpKeepAlivePeriod,
+		Timeout:   c.timeout(),
 	}
 	conn, err := dialer.Dial("tcp", c.Addr)
 	if err != nil {
@@ -185,6 +188,10 @@ func (c *TCPClient) connect() (net.Conn, error) {
 		return nil, err
 	}
 	if err := tcpConn.SetKeepAlivePeriod(tcpKeepAlivePeriod); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Now().Add(c.timeout())); err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -208,7 +215,11 @@ func (c *TCPClient) connect() (net.Conn, error) {
 		conn.Close()
 		return nil, fmt.Errorf("unexpected handshake response: %q", string(buf[:]))
 	}
-	log.Printf("Connected to server at %s, replaying messages since %d", c.Addr, c.LastTS)
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	c.Log("Connected to server at %s, replaying messages since %d", c.Addr, c.LastTS)
 	return conn, nil
 }
 
@@ -248,8 +259,19 @@ func (c *TCPClient) send(id string, ts int64, data []byte) error {
 	if conn == nil {
 		return fmt.Errorf("not connected")
 	}
+	if err := conn.SetWriteDeadline(time.Now().Add(c.timeout())); err != nil {
+		return err
+	}
+	defer conn.SetWriteDeadline(time.Time{})
 	_, err = int.Msg{ID: id, TS: ts, Data: data}.WriteTo(conn)
 	return err
+}
+
+func (c *TCPClient) timeout() time.Duration {
+	if c.Timeout > 0 {
+		return c.Timeout
+	}
+	return defaultTimeout
 }
 
 // TODO move to enc
