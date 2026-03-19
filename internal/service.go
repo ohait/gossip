@@ -18,12 +18,17 @@ type Service struct {
 	index map[string]IndexEntry
 	log   *Log
 
-	clients map[string]chan<- *Msg
+	clients map[string]chan<- outboundMsg
+}
+
+type outboundMsg struct {
+	cmd byte
+	msg Msg
 }
 
 func (s *Service) Init() error {
 	s.index = make(map[string]IndexEntry)
-	s.clients = make(map[string]chan<- *Msg)
+	s.clients = make(map[string]chan<- outboundMsg)
 	if s.LogsFolder == "" {
 		s.LogsFolder = "logs"
 	}
@@ -91,8 +96,8 @@ type IndexEntry struct {
 func (s *Service) Add(msg Msg) error {
 	s.m.Lock()
 	defer s.m.Unlock()
-	if msg.TS >= time.Now().Add(time.Second).UnixNano() {
-		return fmt.Errorf("message timestamp %d is too far in the future", msg.TS)
+	if err := validateMsg(msg); err != nil {
+		return err
 	}
 	prev := s.index[msg.ID]
 	if prev.File != "" {
@@ -124,14 +129,37 @@ func (s *Service) Add(msg Msg) error {
 	//if prev.File != "" {
 	//}
 	s.index[msg.ID] = entry
-	s.broadcast(msg)
+	s.broadcast(CmdMessage, msg)
 	return nil
 }
 
-func (s *Service) broadcast(msg Msg) {
+func (s *Service) Signal(msg Msg) error {
+	if err := validateMsg(msg); err != nil {
+		return err
+	}
+	s.m.Lock()
+	defer s.m.Unlock()
+	s.broadcast(CmdSignal, msg)
+	return nil
+}
+
+func validateMsg(msg Msg) error {
+	if msg.TS >= time.Now().Add(time.Second).UnixNano() {
+		return fmt.Errorf("message timestamp %d is too far in the future", msg.TS)
+	}
+	if len(msg.ID) > 256 {
+		return fmt.Errorf("id length %d exceeds maximum allowed length 256", len(msg.ID))
+	}
+	if len(msg.Data) > 1024*1024*1024 {
+		return fmt.Errorf("data length %d exceeds maximum allowed length 1GB", len(msg.Data))
+	}
+	return nil
+}
+
+func (s *Service) broadcast(cmd byte, msg Msg) {
 	for _, inbox := range s.clients {
 		select {
-		case inbox <- &msg:
+		case inbox <- outboundMsg{cmd: cmd, msg: msg}:
 		default:
 		}
 	}

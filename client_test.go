@@ -53,12 +53,12 @@ func TestE2E(t *testing.T) {
 		// poll until the client has connected and the send succeeds
 		var sendErr error
 		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-			if sendErr = cli.Send(tt.ID, tt.TS, tt.Data); sendErr == nil {
+			if sendErr = cli.Publish(tt.ID, tt.TS, tt.Data); sendErr == nil {
 				break
 			}
 		}
 		if sendErr != nil {
-			t.Fatalf("Send(%s): %v", tt.ID, sendErr)
+			t.Fatalf("Publish(%s): %v", tt.ID, sendErr)
 		}
 
 		select {
@@ -120,12 +120,86 @@ func TestClientSendTimeout(t *testing.T) {
 	}
 
 	data := make([]byte, 1<<20)
-	err := cli.send("msg-1", 1, data)
+	err := cli.send(int.CmdMessage, "msg-1", 1, data)
 	if err == nil {
 		t.Fatal("send() unexpectedly succeeded")
 	}
 	var netErr net.Error
 	if !errors.As(err, &netErr) || !netErr.Timeout() {
 		t.Fatalf("send() error = %v, want timeout", err)
+	}
+}
+
+func TestSignalE2EAndNoReplay(t *testing.T) {
+	svc := &int.Service{LogsFolder: t.TempDir()}
+	if err := svc.Init(); err != nil {
+		t.Fatal(err)
+	}
+	addr, err := svc.Bind("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	received := make(chan int.Msg, 1)
+	receiver := &TCPClient{
+		Addr: addr,
+		OnMessage: func(id string, ts int64, data []byte) error {
+			received <- int.Msg{ID: id, TS: ts, Data: data}
+			return nil
+		},
+	}
+	if err := receiver.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer receiver.Close()
+
+	sender := &TCPClient{
+		Addr: addr,
+		OnMessage: func(id string, ts int64, data []byte) error {
+			return nil
+		},
+	}
+	if err := sender.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer sender.Close()
+
+	want := int.Msg{ID: "sig-1", TS: 42, Data: []byte("flash")}
+	var sendErr error
+	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if sendErr = sender.Emit(want.ID, want.TS, want.Data); sendErr == nil {
+			break
+		}
+	}
+	if sendErr != nil {
+		t.Fatalf("Emit(%s): %v", want.ID, sendErr)
+	}
+
+	select {
+	case got := <-received:
+		if got.ID != want.ID || got.TS != want.TS || string(got.Data) != string(want.Data) {
+			t.Fatalf("got {ID:%q TS:%d Data:%q}, want {ID:%q TS:%d Data:%q}", got.ID, got.TS, got.Data, want.ID, want.TS, want.Data)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for transient send")
+	}
+
+	replayed := make(chan struct{}, 1)
+	reconnect := &TCPClient{
+		Addr: addr,
+		OnMessage: func(id string, ts int64, data []byte) error {
+			replayed <- struct{}{}
+			return nil
+		},
+	}
+	if err := reconnect.Init(); err != nil {
+		t.Fatal(err)
+	}
+	defer reconnect.Close()
+
+	select {
+	case <-replayed:
+		t.Fatal("transient send was replayed to a new client")
+	case <-time.After(200 * time.Millisecond):
 	}
 }

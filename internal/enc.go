@@ -11,6 +11,7 @@ const (
 	Handshake       = "GOSSIP\n" // 7-byte ack sent by the server
 
 	CmdMessage   = byte('M') // message command byte
+	CmdSignal    = byte('S') // signal (like a message, but not persisted or replayed)
 	CmdReplyDone = byte('D')
 )
 

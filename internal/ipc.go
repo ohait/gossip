@@ -16,7 +16,15 @@ type Msg struct {
 }
 
 func (m Msg) WriteTo(w io.Writer) (n int64, err error) {
-	_, err = w.Write([]byte{CmdMessage})
+	return m.writeTo(w, CmdMessage)
+}
+
+func (m Msg) WriteSignalTo(w io.Writer) (n int64, err error) {
+	return m.writeTo(w, CmdSignal)
+}
+
+func (m Msg) writeTo(w io.Writer, cmd byte) (n int64, err error) {
+	_, err = w.Write([]byte{cmd})
 	if err != nil {
 		return
 	}
@@ -146,7 +154,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 		log.Printf("Error writing handshake response: %v", err)
 		return
 	}
-	inbox := make(chan *Msg, 100)
+	inbox := make(chan outboundMsg, 100)
 	s.m.Lock()
 	s.clients[conn.RemoteAddr().String()] = inbox
 	s.m.Unlock()
@@ -163,13 +171,20 @@ func (s *Service) handleConnection(conn net.Conn) {
 		}
 		for {
 			select {
-			case msg, ok := <-inbox:
+			case item, ok := <-inbox:
 				if !ok {
 					log.Printf("Inbox channel closed for %s", conn.RemoteAddr().String())
 					return
 				}
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				if _, err := msg.WriteTo(conn); err != nil {
+				var err error
+				switch item.cmd {
+				case CmdSignal:
+					_, err = item.msg.WriteSignalTo(conn)
+				default:
+					_, err = item.msg.WriteTo(conn)
+				}
+				if err != nil {
 					log.Printf("Error writing message: %v", err)
 					return
 				}
@@ -216,6 +231,25 @@ func (s *Service) handleConnection(conn net.Conn) {
 				return
 			}
 			log.Printf("Added message: ID=%s, TS=%d, DataSize=%d", msg.ID, msg.TS, len(msg.Data))
+		case CmdSignal:
+			var msg Msg
+			if _, err := msg.Decode(conn, s.MaxData); err != nil {
+				if errors.Is(err, io.EOF) {
+					log.Printf("Client %s disconnected", conn.RemoteAddr().String())
+				} else {
+					conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+					conn.Write([]byte("Error decoding signal\n"))
+					log.Printf("Error decoding signal: %v", err)
+				}
+				return
+			}
+			if err := s.Signal(msg); err != nil {
+				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+				conn.Write([]byte("Error forwarding signal\n"))
+				log.Printf("Error forwarding signal: %v", err)
+				return
+			}
+			log.Printf("Forwarded signal: ID=%s, TS=%d, DataSize=%d", msg.ID, msg.TS, len(msg.Data))
 		default:
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			conn.Write([]byte("Unknown command\n"))

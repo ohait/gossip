@@ -77,6 +77,38 @@ func TestAddEqualTSIgnored(t *testing.T) {
 	}
 }
 
+func TestSignalBroadcastsWithoutPersisting(t *testing.T) {
+	s := newTestService(t)
+	inbox := make(chan outboundMsg, 1)
+	s.m.Lock()
+	s.clients["test"] = inbox
+	s.m.Unlock()
+
+	msg := Msg{ID: "sig-1", TS: 100, Data: []byte("hello")}
+	if err := s.Signal(msg); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case got := <-inbox:
+		if got.cmd != CmdSignal {
+			t.Fatalf("cmd = %q, want %q", got.cmd, CmdSignal)
+		}
+		if got.msg.ID != msg.ID || got.msg.TS != msg.TS || string(got.msg.Data) != string(msg.Data) {
+			t.Fatalf("got %+v, want %+v", got.msg, msg)
+		}
+	default:
+		t.Fatal("signal was not broadcast")
+	}
+
+	if len(s.index) != 0 {
+		t.Fatalf("signal should not touch index, got %d entries", len(s.index))
+	}
+	if s.log != nil {
+		t.Fatal("signal should not create or append to a log")
+	}
+}
+
 func TestInitRebuildsIndex(t *testing.T) {
 	dir := t.TempDir()
 

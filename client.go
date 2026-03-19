@@ -26,8 +26,11 @@ type Client interface {
 	// Setup the client and reply the history, blocks until the replay is completed
 	Init() error
 
-	// Send writes a message to the log and broadcast to all the replicas, might block retrying if the log is not available.
-	Send(id string, ts int64, data []byte) error
+	// Publish broadcasts data and persists it.
+	Publish(id string, ts int64, data []byte) error
+
+	// Emit broadcasts transient data without persisting it.
+	Emit(id string, ts int64, data []byte) error
 
 	// Close the client
 	Close() error
@@ -146,27 +149,33 @@ func (c *TCPClient) connectAndReceive() error {
 			default:
 			}
 		case int.CmdMessage:
-			var msg int.Msg
-			if _, err := msg.Decode(conn, 0); err != nil {
+			if err := c.handleIncoming(conn, true); err != nil {
 				return err
 			}
-			data, err := decodePayload(msg.Data)
-			if err != nil {
+		case int.CmdSignal:
+			if err := c.handleIncoming(conn, false); err != nil {
 				return err
-			}
-			id, ts := msg.ID, msg.TS
-			if c.LastTS < ts {
-				c.LastTS = ts // move Since forward
-			}
-			onMessage := c.OnMessage
-			if onMessage != nil {
-				err := onMessage(id, ts, data)
-				if err != nil {
-					return err
-				}
 			}
 		}
 	}
+}
+
+func (c *TCPClient) handleIncoming(conn net.Conn, persist bool) error {
+	var msg int.Msg
+	if _, err := msg.Decode(conn, 0); err != nil {
+		return err
+	}
+	data, err := decodePayload(msg.Data)
+	if err != nil {
+		return err
+	}
+	if persist && c.LastTS < msg.TS {
+		c.LastTS = msg.TS // move Since forward only for replayable data
+	}
+	if c.OnMessage != nil {
+		return c.OnMessage(msg.ID, msg.TS, data)
+	}
+	return nil
 }
 
 func (c *TCPClient) connect() (net.Conn, error) {
@@ -223,12 +232,21 @@ func (c *TCPClient) connect() (net.Conn, error) {
 	return conn, nil
 }
 
-// Send writes a message to the server with automatic retry on failure.
+// Publish writes durable data to the server with automatic retry on failure.
 // TODO: accept a context.Context to allow cancellation during retries.
-func (c *TCPClient) Send(id string, ts int64, data []byte) error {
+func (c *TCPClient) Publish(id string, ts int64, data []byte) error {
+	return c.sendWithCmd(int.CmdMessage, id, ts, data)
+}
+
+// Emit writes transient data to the server with automatic retry on failure.
+func (c *TCPClient) Emit(id string, ts int64, data []byte) error {
+	return c.sendWithCmd(int.CmdSignal, id, ts, data)
+}
+
+func (c *TCPClient) sendWithCmd(cmd byte, id string, ts int64, data []byte) error {
 	var firstError error
 	for i := 1; i <= 5; i++ {
-		err := c.send(id, ts, data)
+		err := c.send(cmd, id, ts, data)
 		if err == nil {
 			return nil
 		}
@@ -245,7 +263,7 @@ func (c *TCPClient) Send(id string, ts int64, data []byte) error {
 	return fmt.Errorf("after 5 retries: %w", firstError)
 }
 
-func (c *TCPClient) send(id string, ts int64, data []byte) error {
+func (c *TCPClient) send(cmd byte, id string, ts int64, data []byte) error {
 	if c.close.Load() {
 		return os.ErrClosed
 	}
@@ -263,7 +281,13 @@ func (c *TCPClient) send(id string, ts int64, data []byte) error {
 		return err
 	}
 	defer conn.SetWriteDeadline(time.Time{})
-	_, err = int.Msg{ID: id, TS: ts, Data: data}.WriteTo(conn)
+	msg := int.Msg{ID: id, TS: ts, Data: data}
+	switch cmd {
+	case int.CmdSignal:
+		_, err = msg.WriteSignalTo(conn)
+	default:
+		_, err = msg.WriteTo(conn)
+	}
 	return err
 }
 
