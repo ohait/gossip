@@ -1,4 +1,4 @@
-module oha.it/gossip
+module github.com/ohait/gossip
 
 go 1.25.0
 
