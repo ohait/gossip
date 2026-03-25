@@ -8,7 +8,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"oha.it/gossip/internal"
+	gossip "github.com/ohait/gossip/internal"
 )
 
 func main() {

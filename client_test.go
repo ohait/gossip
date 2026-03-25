@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	int "oha.it/gossip/internal"
+	int "github.com/ohait/gossip/internal"
 )
 
 func TestE2E(t *testing.T) {

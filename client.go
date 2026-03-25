@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	gi "oha.it/gossip/internal"
+	gi "github.com/ohait/gossip/internal"
 )
 
 const (
