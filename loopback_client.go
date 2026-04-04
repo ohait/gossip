@@ -26,9 +26,14 @@ func (c *LoopbackClient) Init() error {
 		return err
 	}
 	log := gi.NewLog(f)
+	latestTS := make(map[string]int64)
 	err = log.RangeSince(0, func(m gi.Msg) error {
+		if prev, ok := latestTS[m.ID]; !ok || prev < m.TS {
+			latestTS[m.ID] = m.TS
+		}
 		return c.OnMessage(m.ID, m.TS, m.Data)
 	})
+
 	if err != nil {
 		log.Close()
 		return err
