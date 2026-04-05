@@ -27,10 +27,10 @@ type Client interface {
 	Init() error
 
 	// Publish broadcasts data and persists it.
-	Publish(id string, ts int64, data []byte) error
+	Publish(id string, ts_epoch_ns int64, data []byte) error
 
 	// Emit broadcasts transient data without persisting it.
-	Emit(id string, ts int64, data []byte) error
+	Emit(id string, ts_epoch_ns int64, data []byte) error
 
 	// Close the client
 	Close() error
