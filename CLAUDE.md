@@ -13,6 +13,9 @@ go mod tidy       # sync dependencies
 ## Workflow
 
 - Always run `go test ./...` before committing.
+- If tests fail:
+  - If the failure is related to your changes, fix it before committing; if you can't, escalate to the user.
+  - If the failure is unrelated to your changes, proceed with the commit but warn the user.
 
 ## What it is
 
