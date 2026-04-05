@@ -168,12 +168,12 @@ func TestSignalE2EAndNoReplay(t *testing.T) {
 	want := int.Msg{ID: "sig-1", TS: 42, Data: []byte("flash")}
 	var sendErr error
 	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if sendErr = sender.Emit(want.ID, want.TS, want.Data); sendErr == nil {
+		if sendErr = sender.Signal(want.ID, want.TS, want.Data); sendErr == nil {
 			break
 		}
 	}
 	if sendErr != nil {
-		t.Fatalf("Emit(%s): %v", want.ID, sendErr)
+		t.Fatalf("Signal(%s): %v", want.ID, sendErr)
 	}
 
 	select {

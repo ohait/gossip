@@ -16,7 +16,7 @@ func (c *MockClient) Publish(id string, ts int64, data []byte) error {
 	return c.OnMessage(id, ts, data)
 }
 
-func (c *MockClient) Emit(id string, ts int64, data []byte) error {
+func (c *MockClient) Signal(id string, ts int64, data []byte) error {
 	return c.OnMessage(id, ts, data)
 }
 

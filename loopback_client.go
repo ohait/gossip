@@ -33,7 +33,6 @@ func (c *LoopbackClient) Init() error {
 		}
 		return c.OnMessage(m.ID, m.TS, m.Data)
 	})
-
 	if err != nil {
 		log.Close()
 		return err
@@ -51,7 +50,7 @@ func (c *LoopbackClient) Close() error {
 	return err
 }
 
-func (c *LoopbackClient) Emit(id string, ts int64, data []byte) error {
+func (c *LoopbackClient) Signal(id string, ts int64, data []byte) error {
 	if c.log == nil {
 		return fmt.Errorf("client not initialized")
 	}

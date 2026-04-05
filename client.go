@@ -25,8 +25,8 @@ type Client interface {
 	// Publish broadcasts data and persists it.
 	Publish(id string, ts_epoch_ns int64, data []byte) error
 
-	// Emit broadcasts transient data without persisting it.
-	Emit(id string, ts_epoch_ns int64, data []byte) error
+	// Signal broadcasts transient data without persisting it.
+	Signal(id string, ts_epoch_ns int64, data []byte) error
 
 	// Close the client
 	Close() error
@@ -235,8 +235,8 @@ func (c *TCPClient) Publish(id string, ts int64, data []byte) error {
 	return c.sendWithCmd(gi.CmdMessage, id, ts, data)
 }
 
-// Emit writes transient data to the server with automatic retry on failure.
-func (c *TCPClient) Emit(id string, ts int64, data []byte) error {
+// Signal writes transient data to the server with automatic retry on failure.
+func (c *TCPClient) Signal(id string, ts int64, data []byte) error {
 	return c.sendWithCmd(gi.CmdSignal, id, ts, data)
 }
 

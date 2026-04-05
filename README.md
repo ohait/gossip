@@ -10,7 +10,7 @@ Clients `Publish` messages with:
 
 The server appends each message to a binary log on disk and broadcasts it to connected clients. On startup, it replays the log files to rebuild its in-memory index.
 
-Clients can also `Emit` the same payload as transient data. It is forwarded live to connected clients, but it is not written to disk and never appears in replay.
+Clients can also `Signal` the same payload as transient data. It is forwarded live to connected clients, but it is not written to disk and never appears in replay.
 
 It's not meant to run in a distributed system, but just as an helper for applications that need a simple persistent pub/sub log.
 
@@ -26,11 +26,13 @@ Each message is:
 
 The message ID is the key. For a given ID, the newest timestamp wins logically.
 
-`Publish` updates the durable index and participates in replay. `Emit` is forwarded to currently connected clients only, does not update the durable index, and is not replayed after reconnect.
+`Publish` updates the durable index and participates in replay. `Signal` is forwarded to currently connected clients only, does not update the durable index, and is not replayed after reconnect.
 
-For a given `id`, `Publish` and `Emit` should not be mixed unless you explicitly want that behavior. `Emit` does not supersede the persisted state for the same `id`. If the last persisted value is `v1` and a later transient send carries `v2`, live clients may observe `v2`, but replay will still return `v1`.
+**Deduplication:** `Publish` deduplicates by `ts` — if a message arrives for an existing ID with a timestamp older than or equal to the stored one, it is silently dropped and not broadcast. `Signal` has no such check: every call is always forwarded to all connected clients, regardless of timestamp.
 
-If you need to remove durable state for an `id`, send a persisted tombstone. A transient send does not clear or replace the replayable value.
+For a given `id`, `Publish` and `Signal` should not be mixed unless you explicitly want that behavior. `Signal` does not supersede the persisted state for the same `id`. If the last persisted value is `v1` and a later transient send carries `v2`, live clients may observe `v2`, but replay will still return `v1`.
+
+If you need to remove durable state for an `id`, send a persisted tombstone. A `Signal` does not clear or replace the replayable value.
 
 ## Timestamp
 

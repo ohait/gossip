@@ -70,7 +70,7 @@ func TestLoopbackClientInitReplaysExistingData(t *testing.T) {
 	}
 }
 
-func TestLoopbackClientEmitDoesNotPersist(t *testing.T) {
+func TestLoopbackClientSignalDoesNotPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loopback.bin")
 	var emitted int
 	writer := &LoopbackClient{
@@ -86,8 +86,8 @@ func TestLoopbackClientEmitDoesNotPersist(t *testing.T) {
 	if err := writer.Init(); err != nil {
 		t.Fatalf("writer.Init(): %v", err)
 	}
-	if err := writer.Emit("sig-1", time.Now().UnixNano(), []byte("hello")); err != nil {
-		t.Fatalf("writer.Emit(): %v", err)
+	if err := writer.Signal("sig-1", time.Now().UnixNano(), []byte("hello")); err != nil {
+		t.Fatalf("writer.Signal(): %v", err)
 	}
 	if emitted != 1 {
 		t.Fatalf("emitted = %d, want 1", emitted)
@@ -128,7 +128,7 @@ func TestLoopbackClientClose(t *testing.T) {
 	if err := c.Publish("id-1", time.Now().UnixNano(), []byte("hello")); err == nil {
 		t.Fatal("Publish() after Close() unexpectedly succeeded")
 	}
-	if err := c.Emit("id-2", time.Now().UnixNano(), []byte("hello")); err == nil {
-		t.Fatal("Emit() after Close() unexpectedly succeeded")
+	if err := c.Signal("id-2", time.Now().UnixNano(), []byte("hello")); err == nil {
+		t.Fatal("Signal() after Close() unexpectedly succeeded")
 	}
 }
