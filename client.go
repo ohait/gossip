@@ -1,8 +1,6 @@
 package gossip
 
 import (
-	"bytes"
-	"compress/zlib"
 	"fmt"
 	"io"
 	"log"
@@ -16,10 +14,8 @@ import (
 )
 
 const (
-	payloadEncodingRaw  = byte('=') // TODO move to enc
-	payloadEncodingZlib = byte('z') // TODO move to enc
-	tcpKeepAlivePeriod  = 30 * time.Second
-	defaultTimeout      = 10 * time.Second
+	tcpKeepAlivePeriod = 30 * time.Second
+	defaultTimeout     = 10 * time.Second
 )
 
 type Client interface {
@@ -166,7 +162,7 @@ func (c *TCPClient) handleIncoming(conn net.Conn, persist bool) error {
 	if _, err := msg.Decode(conn, 0); err != nil {
 		return err
 	}
-	data, err := decodePayload(msg.Data)
+	data, err := gi.DecodePayload(msg.Data)
 	if err != nil {
 		return err
 	}
@@ -268,7 +264,7 @@ func (c *TCPClient) send(cmd byte, id string, ts int64, data []byte) error {
 	if c.close.Load() {
 		return os.ErrClosed
 	}
-	data, err := encodePayload(data)
+	data, err := gi.EncodePayload(data)
 	if err != nil {
 		return err
 	}
@@ -297,56 +293,4 @@ func (c *TCPClient) timeout() time.Duration {
 		return c.Timeout
 	}
 	return defaultTimeout
-}
-
-// TODO move to enc
-func encodePayload(data []byte) ([]byte, error) {
-	var compressed bytes.Buffer
-	zw, err := zlib.NewWriterLevel(&compressed, zlib.BestSpeed)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := zw.Write(data); err != nil {
-		zw.Close()
-		return nil, err
-	}
-	if err := zw.Close(); err != nil {
-		return nil, err
-	}
-	if compressed.Len() < len(data) {
-		out := make([]byte, 1+compressed.Len())
-		out[0] = payloadEncodingZlib
-		copy(out[1:], compressed.Bytes())
-		return out, nil
-	}
-	out := make([]byte, 1+len(data))
-	out[0] = payloadEncodingRaw
-	copy(out[1:], data)
-	return out, nil
-}
-
-// TODO move to enc
-func decodePayload(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, fmt.Errorf("missing payload encoding")
-	}
-	switch data[0] {
-	case payloadEncodingRaw:
-		out := make([]byte, len(data)-1)
-		copy(out, data[1:])
-		return out, nil
-	case payloadEncodingZlib:
-		zr, err := zlib.NewReader(bytes.NewReader(data[1:]))
-		if err != nil {
-			return nil, err
-		}
-		defer zr.Close()
-		out, err := io.ReadAll(zr)
-		if err != nil {
-			return nil, err
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("unknown payload encoding %q", data[0])
-	}
 }

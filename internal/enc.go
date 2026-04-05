@@ -1,6 +1,8 @@
 package gossip
 
 import (
+	"bytes"
+	"compress/zlib"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -13,7 +15,64 @@ const (
 	CmdMessage   = byte('M') // message command byte
 	CmdSignal    = byte('S') // signal (like a message, but not persisted or replayed)
 	CmdReplyDone = byte('D')
+
+	PayloadEncodingRaw  = byte('=') // payload is stored as-is
+	PayloadEncodingZlib = byte('z') // payload is zlib-compressed
 )
+
+// EncodePayload compresses data with zlib if that reduces its size, prefixing
+// the result with a one-byte encoding tag (PayloadEncodingZlib or PayloadEncodingRaw).
+func EncodePayload(data []byte) ([]byte, error) {
+	var compressed bytes.Buffer
+	zw, err := zlib.NewWriterLevel(&compressed, zlib.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := zw.Write(data); err != nil {
+		zw.Close()
+		return nil, err
+	}
+	if err := zw.Close(); err != nil {
+		return nil, err
+	}
+	if compressed.Len() < len(data) {
+		out := make([]byte, 1+compressed.Len())
+		out[0] = PayloadEncodingZlib
+		copy(out[1:], compressed.Bytes())
+		return out, nil
+	}
+	out := make([]byte, 1+len(data))
+	out[0] = PayloadEncodingRaw
+	copy(out[1:], data)
+	return out, nil
+}
+
+// DecodePayload reverses EncodePayload, stripping the encoding tag and
+// decompressing if necessary.
+func DecodePayload(data []byte) ([]byte, error) {
+	if len(data) == 0 {
+		return nil, fmt.Errorf("missing payload encoding")
+	}
+	switch data[0] {
+	case PayloadEncodingRaw:
+		out := make([]byte, len(data)-1)
+		copy(out, data[1:])
+		return out, nil
+	case PayloadEncodingZlib:
+		zr, err := zlib.NewReader(bytes.NewReader(data[1:]))
+		if err != nil {
+			return nil, err
+		}
+		defer zr.Close()
+		out, err := io.ReadAll(zr)
+		if err != nil {
+			return nil, err
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("unknown payload encoding %q", data[0])
+	}
+}
 
 func WriteBytes(f io.Writer, b []byte) error {
 	var lenBuf [8]byte
