@@ -9,18 +9,24 @@ COPY . .
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 GOOS=linux go build -o /out/gossip ./cmd/main.go
+    CGO_ENABLED=0 GOOS=linux go build \
+        -trimpath \
+        -ldflags="-s -w" \
+        -o /out/gossip ./cmd
 
-FROM alpine:3.22
+# Pre-create the data dir owned by the runtime UID so named
+# volumes are seeded with correct permissions on first use.
+RUN mkdir -p /out/data/logs && chown -R 10001:10001 /out/data
 
-RUN apk add --no-cache ca-certificates
+FROM scratch
 
-WORKDIR /app
-COPY --from=builder /out/gossip /app/gossip
+COPY --from=builder /out/gossip /gossip
+# copy to create an empty /data/logs dir with the right ownership
+COPY --from=builder /out/data   /data
 
-RUN mkdir -p /data/logs
+USER 10001:10001
 
 EXPOSE 7950
 VOLUME ["/data"]
 
-CMD ["/app/gossip", "-l", ":7950", "/data/logs"]
+CMD ["/gossip", "-l", ":7950", "/data/logs"]
