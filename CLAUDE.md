@@ -10,6 +10,10 @@ go test ./...     # run all tests
 go mod tidy       # sync dependencies
 ```
 
+## Workflow
+
+- Always run `go test ./...` before committing.
+
 ## What it is
 
 A persistent pub/sub log service over TCP. Clients connect, send messages (`ID`, `timestamp`, `data`), which are appended to binary log files on disk and broadcast live to all other connected clients. On startup, the service replays `.bin` log files to rebuild the in-memory index.
