@@ -65,10 +65,15 @@ func (l *Log) Flush() error {
 func (l *Log) Append(msg Msg) (entry IndexEntry, err error) {
 	entry.TS = msg.TS
 	entry.File = l.path
-	if len(msg.ID) > 256 {
-		return entry, fmt.Errorf("id length %d exceeds maximum allowed length 256", len(msg.ID))
+	if len(msg.ID) > 1024 {
+		return entry, fmt.Errorf("id length %d exceeds maximum allowed length 1024", len(msg.ID))
 	}
-	// TODO check if msg.ID is valid (printable, no spaces, no symbols, ascii only)
+	for i := 0; i < len(msg.ID); i++ {
+		c := msg.ID[i]
+		if c < 0x21 || c > 0x7e {
+			return entry, fmt.Errorf("id contains invalid character %q at position %d: only printable ASCII (no spaces) is allowed", c, i)
+		}
+	}
 
 	if len(msg.Data) > 1024*1024*1024 {
 		return entry, fmt.Errorf("data length %d exceeds maximum allowed length 1GB", len(msg.Data))

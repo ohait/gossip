@@ -30,6 +30,6 @@ A persistent pub/sub log service over TCP. Clients connect, send messages (`ID`,
 3. XXHash64 checksum (uint64)
 4. Data length (int64) + raw bytes
 
-**Constraints:** ID ≤ 256 bytes, data ≤ 1GB in storage; IPC cap is `Service.MaxData`.
+**Constraints:** ID ≤ 1024 bytes (printable ASCII, no spaces), data ≤ 1GB in storage; IPC cap is `Service.MaxData`.
 
 **Dependency:** `github.com/cespare/xxhash/v2` for checksums.
