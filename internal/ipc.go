@@ -5,14 +5,14 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 	"time"
 )
 
 type Msg struct {
-	ID   string
-	TS   int64
-	Data []byte
+	Topic string // max 1024 bytes
+	ID    string // max 1024 bytes
+	TS    int64
+	Data  []byte
 }
 
 func (m Msg) WriteTo(w io.Writer) (n int64, err error) {
@@ -28,7 +28,11 @@ func (m Msg) writeTo(w io.Writer, cmd byte) (n int64, err error) {
 	if err != nil {
 		return
 	}
-	err = WriteString(w, m.ID)
+	err = WriteID(w, m.Topic)
+	if err != nil {
+		return
+	}
+	err = WriteID(w, m.ID)
 	if err != nil {
 		return
 	}
@@ -44,7 +48,11 @@ func (m Msg) writeTo(w io.Writer, cmd byte) (n int64, err error) {
 }
 
 func (m *Msg) Decode(r io.Reader, maxSize int) (n int64, err error) {
-	m.ID, err = ReadString(r, 256)
+	m.Topic, err = ReadID(r)
+	if err != nil {
+		return
+	}
+	m.ID, err = ReadID(r)
 	if err != nil {
 		return
 	}
@@ -102,11 +110,10 @@ func (s *Service) replay(since int64, conn net.Conn) error {
 	}
 	s.m.Unlock()
 	for file := range files {
-		f, err := os.Open(file)
+		l, err := OpenLog(file)
 		if err != nil {
 			return err
 		}
-		l := NewLog(f)
 		err = l.RangeSince(since, func(msg Msg) error {
 			if msg.TS != ts[msg.ID] {
 				return nil // skip older versions of the same ID
@@ -115,7 +122,7 @@ func (s *Service) replay(since int64, conn net.Conn) error {
 			_, err := msg.WriteTo(conn)
 			return err
 		})
-		f.Close()
+		l.Close()
 		if err != nil {
 			return err
 		}

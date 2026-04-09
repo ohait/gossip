@@ -21,11 +21,10 @@ func (c *LoopbackClient) Init() error {
 	if c.OnMessage == nil {
 		return fmt.Errorf("missing OnMessage callback")
 	}
-	f, err := os.OpenFile(c.LogFile, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
+	log, err := gi.AppendLog(c.LogFile)
 	if err != nil {
 		return err
 	}
-	log := gi.NewLog(f)
 	latestTS := make(map[string]int64)
 	err = log.RangeSince(0, func(m gi.Msg) error {
 		if prev, ok := latestTS[m.ID]; !ok || prev < m.TS {

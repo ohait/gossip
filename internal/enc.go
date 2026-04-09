@@ -91,6 +91,22 @@ func WriteBytes(f io.Writer, b []byte) error {
 	return nil
 }
 
+func ReadID(f io.Reader) (string, error) {
+	lenBuf := make([]byte, 2) // 2 bytes => max length 65535, which is more than enough for IDs
+	if _, err := io.ReadFull(f, lenBuf); err != nil {
+		return "", err
+	}
+	n := binary.BigEndian.Uint16(lenBuf)
+	if n > 1024 {
+		return "", fmt.Errorf("id length %d exceeds maximum allowed length 1024", n)
+	}
+	b := make([]byte, n)
+	if _, err := io.ReadFull(f, b); err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
 func ReadBytes(f io.Reader, maxLength int) ([]byte, error) {
 	lenBuf := make([]byte, 8)
 	if _, err := io.ReadFull(f, lenBuf); err != nil {
@@ -105,6 +121,26 @@ func ReadBytes(f io.Reader, maxLength int) ([]byte, error) {
 		return nil, err
 	}
 	return b, nil
+}
+
+func WriteID(f io.Writer, s string) error {
+	b := []byte(s)
+	if len(b) > 1024 {
+		return fmt.Errorf("id length %d exceeds maximum allowed length 1024", len(s))
+	}
+	var lenBuf [2]byte
+	binary.BigEndian.PutUint16(lenBuf[:], uint16(len(b)))
+	if nw, err := f.Write(lenBuf[:]); err != nil {
+		return err
+	} else if nw < len(lenBuf) {
+		return io.ErrShortWrite
+	}
+	if nw, err := f.Write(b); err != nil {
+		return err
+	} else if nw < len(b) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func WriteString(f io.Writer, s string) error {

@@ -5,27 +5,32 @@ import (
 	"testing"
 )
 
-func newTestLog(t *testing.T) (*Log, func()) {
+func newTestLog(t *testing.T) *Log {
 	t.Helper()
 	f, err := os.CreateTemp(t.TempDir(), "log-*.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
-	l := NewLog(f)
-	return l, func() { f.Close() }
+	path := f.Name()
+	f.Close()
+	l, err := CreateLog(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	return l
 }
 
 func TestAppendAndRead(t *testing.T) {
-	l, cleanup := newTestLog(t)
-	defer cleanup()
+	l := newTestLog(t)
 
 	msg := Msg{ID: "msg-1", TS: 12345, Data: []byte("hello world")}
 	entry, err := l.Append(msg)
 	if err != nil {
 		t.Fatalf("Append: %v", err)
 	}
-	if entry.Offset != 0 {
-		t.Errorf("first entry offset = %d, want 0", entry.Offset)
+	if entry.Offset != 4 {
+		t.Errorf("first entry offset = %d, want 4", entry.Offset)
 	}
 	if entry.TS != msg.TS {
 		t.Errorf("entry.TS = %d, want %d", entry.TS, msg.TS)
@@ -50,8 +55,7 @@ func TestAppendAndRead(t *testing.T) {
 }
 
 func TestAppendMultipleAndRange(t *testing.T) {
-	l, cleanup := newTestLog(t)
-	defer cleanup()
+	l := newTestLog(t)
 
 	msgs := []Msg{
 		{ID: "a", TS: 1, Data: []byte("first")},
@@ -98,8 +102,7 @@ func TestAppendMultipleAndRange(t *testing.T) {
 }
 
 func TestRangeReportsCorrectOffsets(t *testing.T) {
-	l, cleanup := newTestLog(t)
-	defer cleanup()
+	l := newTestLog(t)
 
 	msgs := []Msg{
 		{ID: "x", TS: 10, Data: []byte("foo")},
@@ -125,19 +128,17 @@ func TestRangeReportsCorrectOffsets(t *testing.T) {
 }
 
 func TestAppendRejectsLongID(t *testing.T) {
-	l, cleanup := newTestLog(t)
-	defer cleanup()
+	l := newTestLog(t)
 
 	msg := Msg{ID: string(make([]byte, 257)), TS: 1, Data: []byte("data")}
 	_, err := l.Append(msg)
 	if err == nil {
-		t.Fatal("expected error for ID > 256 bytes, got nil")
+		t.Fatal("expected error for non-printable ID, got nil")
 	}
 }
 
 func TestAppendEmptyData(t *testing.T) {
-	l, cleanup := newTestLog(t)
-	defer cleanup()
+	l := newTestLog(t)
 
 	msg := Msg{ID: "empty", TS: 99, Data: []byte{}}
 	entry, err := l.Append(msg)
@@ -154,8 +155,7 @@ func TestAppendEmptyData(t *testing.T) {
 }
 
 func TestReadCorruptedHash(t *testing.T) {
-	l, cleanup := newTestLog(t)
-	defer cleanup()
+	l := newTestLog(t)
 
 	msg := Msg{ID: "corrupt", TS: 1, Data: []byte("original data")}
 	entry, err := l.Append(msg)
@@ -181,8 +181,7 @@ func TestReadCorruptedHash(t *testing.T) {
 }
 
 func TestRangeEmptyLog(t *testing.T) {
-	l, cleanup := newTestLog(t)
-	defer cleanup()
+	l := newTestLog(t)
 
 	count := 0
 	err := l.Range(func(id string, entry IndexEntry) error {

@@ -56,11 +56,10 @@ func (s *Service) Init() error {
 		log.Printf("scanning %s\n", file.Name())
 		if filepath.Ext(file.Name()) == ".bin" {
 			path := filepath.Join(s.LogsFolder, file.Name())
-			f, err := os.Open(path)
+			lg, err := OpenLog(path)
 			if err != nil {
 				return err
 			}
-			lg := &Log{path: path, f: f}
 			err = lg.Range(func(id string, entry IndexEntry) error {
 				if entry.TS > replayNow {
 					log.Printf("message ID %s has future timestamp %d during replay (now: %d)\n", id, entry.TS, replayNow)
@@ -77,7 +76,7 @@ func (s *Service) Init() error {
 				}
 				return nil
 			})
-			f.Close()
+			lg.Close()
 			if err != nil {
 				return fmt.Errorf("replaying %s: %w", path, err)
 			}
@@ -108,11 +107,11 @@ func (s *Service) Add(msg Msg) error {
 	}
 	if s.log == nil {
 		path := filepath.Join(s.LogsFolder, fmt.Sprintf("log-%x.bin", time.Now().UnixNano()))
-		f, err := os.Create(path)
+		var err error
+		s.log, err = CreateLog(path)
 		if err != nil {
 			return err
 		}
-		s.log = &Log{path: path, f: f}
 	}
 	entry, err := s.log.Append(msg)
 	if err != nil {

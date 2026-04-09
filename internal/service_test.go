@@ -151,30 +151,28 @@ func TestInitKeepsHighestTSAcrossLogs(t *testing.T) {
 	dir := t.TempDir()
 
 	olderPath := dir + "/a-older.bin"
-	olderFile, err := os.Create(olderPath)
+	olderLog, err := CreateLog(olderPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	olderLog := NewLog(olderFile)
 	if _, err := olderLog.Append(Msg{ID: "same", TS: 10, Data: []byte("older")}); err != nil {
 		t.Fatal(err)
 	}
-	if err := olderFile.Close(); err != nil {
+	if err := olderLog.Close(); err != nil {
 		t.Fatal(err)
 	}
 
 	newerPath := dir + "/z-newer.bin"
-	newerFile, err := os.Create(newerPath)
+	newerLog, err := CreateLog(newerPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	newerLog := NewLog(newerFile)
 	newerMsg := Msg{ID: "same", TS: 20, Data: []byte("newer")}
 	newerEntry, err := newerLog.Append(newerMsg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := newerFile.Close(); err != nil {
+	if err := newerLog.Close(); err != nil {
 		t.Fatal(err)
 	}
 
@@ -217,12 +215,11 @@ func TestInitIndexEntriesPointToReadableData(t *testing.T) {
 		t.Fatal("missing index entry after replay")
 	}
 
-	osf, err := os.Open(entry.File)
+	f, err := OpenLog(entry.File)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer osf.Close()
-	f := NewLog(osf)
+	defer f.Close()
 
 	got, err := f.Read(entry.Offset)
 	if err != nil {
