@@ -54,7 +54,7 @@ func TestE2E(t *testing.T) {
 		// poll until the client has connected and the send succeeds
 		var sendErr error
 		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-			if sendErr = cli.Publish(tt.ID, tt.TS, tt.Data); sendErr == nil {
+			if sendErr = cli.PublishLWW(tt.ID, tt.TS, tt.Data); sendErr == nil {
 				break
 			}
 		}
@@ -121,7 +121,7 @@ func TestClientSendTimeout(t *testing.T) {
 	}
 
 	data := make([]byte, 1<<20)
-	err := cli.send(int.CmdMessage, "msg-1", 1, data)
+	err := cli.send(int.CmdLWW, "msg-1", 1, data)
 	if err == nil {
 		t.Fatal("send() unexpectedly succeeded")
 	}

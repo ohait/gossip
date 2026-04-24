@@ -3,6 +3,7 @@ package gossip
 import (
 	"fmt"
 	"os"
+	"time"
 
 	gi "github.com/ohait/gossip/internal"
 )
@@ -56,9 +57,44 @@ func (c *LoopbackClient) Signal(id string, ts int64, data []byte) error {
 	return c.OnMessage(id, ts, data)
 }
 
-func (c *LoopbackClient) Publish(id string, ts int64, data []byte) error {
+func (c *LoopbackClient) PublishCAS(id string, ts int64, data []byte) error {
 	if c.log == nil {
 		return fmt.Errorf("client not initialized")
+	}
+
+	lastTS := c.log.LastTS(id)
+	if ts != lastTS {
+		return fmt.Errorf("CAS failed: expected %v got %v", lastTS, ts)
+	}
+	newTs := time.Now().UnixNano() // use new timestamp
+	if newTs < ts {
+		return fmt.Errorf("LWW timestamp = %d, want >= now", newTs)
+	}
+	_, err := c.log.Append(gi.Msg{
+		ID:   id,
+		TS:   newTs,
+		Data: data,
+	})
+	if err != nil {
+		return err
+	}
+	err = c.log.Flush()
+	if err != nil {
+		return err
+	}
+	if c.OnMessage != nil {
+		return c.OnMessage(id, newTs, data)
+	}
+	return nil
+}
+
+func (c *LoopbackClient) PublishLWW(id string, ts int64, data []byte) error {
+	if c.log == nil {
+		return fmt.Errorf("client not initialized")
+	}
+	lastTS := c.log.LastTS(id)
+	if ts < lastTS {
+		return nil // silently ignore old updates
 	}
 	_, err := c.log.Append(gi.Msg{
 		ID:   id,

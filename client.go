@@ -22,8 +22,13 @@ type Client interface {
 	// Setup the client and reply the history, blocks until the replay is completed
 	Init() error
 
-	// Publish broadcasts data and persists it.
-	Publish(id string, ts_epoch_ns int64, data []byte) error
+	// PublishLWW broadcasts data and persists it using last write wins
+	PublishLWW(id string, ts_epoch_ns int64, data []byte) error
+
+	// PublishCAS broadcasts data and persists it using compare-and-swap
+	// the ts_epoch_ns is expected to match the old one (or zero for new entries)
+	// the data will then get a new ts_epoch_ns assigned if succeed
+	PublishCAS(id string, ts_epoch_ns int64, data []byte) error
 
 	// Signal broadcasts transient data without persisting it.
 	Signal(id string, ts_epoch_ns int64, data []byte) error
@@ -145,7 +150,9 @@ func (c *TCPClient) connectAndReceive() error {
 			case c.replayErr <- nil:
 			default:
 			}
-		case gi.CmdMessage:
+		case gi.CmdCAS:
+			return fmt.Errorf("server should never send CAS messages")
+		case gi.CmdLWW:
 			if err := c.handleIncoming(conn, true); err != nil {
 				return err
 			}
@@ -229,10 +236,14 @@ func (c *TCPClient) connect() (net.Conn, error) {
 	return conn, nil
 }
 
-// Publish writes durable data to the server with automatic retry on failure.
+// PublishLWW writes durable data to the server with automatic retry on failure.
 // TODO: accept a context.Context to allow cancellation during retries.
-func (c *TCPClient) Publish(id string, ts int64, data []byte) error {
-	return c.sendWithCmd(gi.CmdMessage, id, ts, data)
+func (c *TCPClient) PublishLWW(id string, ts int64, data []byte) error {
+	return c.sendWithCmd(gi.CmdLWW, id, ts, data)
+}
+
+func (c *TCPClient) PublishCAS(id string, ts int64, data []byte) error {
+	return c.sendWithCmd(gi.CmdCAS, id, ts, data)
 }
 
 // Signal writes transient data to the server with automatic retry on failure.
@@ -279,12 +290,7 @@ func (c *TCPClient) send(cmd byte, id string, ts int64, data []byte) error {
 	}
 	defer conn.SetWriteDeadline(time.Time{})
 	msg := gi.Msg{ID: id, TS: ts, Data: data}
-	switch cmd {
-	case gi.CmdSignal:
-		_, err = msg.WriteSignalTo(conn)
-	default:
-		_, err = msg.WriteTo(conn)
-	}
+	_, err = msg.WriteTo(conn, cmd)
 	return err
 }
 

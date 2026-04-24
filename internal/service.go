@@ -92,17 +92,28 @@ type IndexEntry struct {
 	Offset int64
 }
 
-func (s *Service) Add(msg Msg) error {
+func (s *Service) Add(msg Msg, cas bool) error {
 	s.m.Lock()
 	defer s.m.Unlock()
 	if err := validateMsg(msg); err != nil {
 		return err
 	}
 	prev := s.index[msg.ID]
-	if prev.File != "" {
-		if prev.TS >= msg.TS {
-			log.Printf("Duplicate message ID %s with older timestamp %d (existing TS: %d)\n", msg.ID, msg.TS, prev.TS)
-			return nil
+	if cas {
+		prevTS := int64(0)
+		if prev.File != "" {
+			prevTS = prev.TS
+		}
+		if prevTS != msg.TS {
+			return fmt.Errorf("CAS failed: existing TS %d does not match expected TS %d", prevTS, msg.TS)
+		}
+		msg.TS = time.Now().UnixNano()
+	} else {
+		if prev.File != "" {
+			if prev.TS >= msg.TS {
+				log.Printf("Duplicate message ID %s with older timestamp %d (existing TS: %d)\n", msg.ID, msg.TS, prev.TS)
+				return nil
+			}
 		}
 	}
 	if s.log == nil {
@@ -126,7 +137,7 @@ func (s *Service) Add(msg Msg) error {
 	//if prev.File != "" {
 	//}
 	s.index[msg.ID] = entry
-	s.broadcast(CmdMessage, msg)
+	s.broadcast(CmdLWW, msg)
 	return nil
 }
 

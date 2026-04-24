@@ -179,6 +179,17 @@ func (l *Log) Flush() error {
 	return l.f.Sync()
 }
 
+func (l *Log) LastTS(id string) int64 {
+	var lastTS int64
+	l.Range(func(eid string, entry IndexEntry) error {
+		if eid == id && entry.TS > lastTS {
+			lastTS = entry.TS
+		}
+		return nil
+	})
+	return lastTS
+}
+
 func (l *Log) Append(msg Msg) (entry IndexEntry, err error) {
 	// only v1 should get here
 	entry.TS = msg.TS

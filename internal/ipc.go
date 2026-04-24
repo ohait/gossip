@@ -15,15 +15,7 @@ type Msg struct {
 	Data  []byte
 }
 
-func (m Msg) WriteTo(w io.Writer) (n int64, err error) {
-	return m.writeTo(w, CmdMessage)
-}
-
-func (m Msg) WriteSignalTo(w io.Writer) (n int64, err error) {
-	return m.writeTo(w, CmdSignal)
-}
-
-func (m Msg) writeTo(w io.Writer, cmd byte) (n int64, err error) {
+func (m Msg) WriteTo(w io.Writer, cmd byte) (n int64, err error) {
 	_, err = w.Write([]byte{cmd})
 	if err != nil {
 		return
@@ -119,7 +111,7 @@ func (s *Service) replay(since int64, conn net.Conn) error {
 				return nil // skip older versions of the same ID
 			}
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			_, err := msg.WriteTo(conn)
+			_, err := msg.WriteTo(conn, CmdLWW)
 			return err
 		})
 		l.Close()
@@ -184,13 +176,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 					return
 				}
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				var err error
-				switch item.Cmd {
-				case CmdSignal:
-					_, err = item.Msg.WriteSignalTo(conn)
-				default:
-					_, err = item.Msg.WriteTo(conn)
-				}
+				_, err := item.Msg.WriteTo(conn, item.Cmd)
 				if err != nil {
 					log.Printf("Error writing message: %v", err)
 					return
@@ -218,7 +204,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 		}
 		conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // timeout for the rest of the message after reading the command byte
 		switch cmd[0] {
-		case CmdMessage:
+		case CmdCAS, CmdLWW:
 			var msg Msg
 			if _, err := msg.Decode(conn, s.MaxData); err != nil {
 				if errors.Is(err, io.EOF) {
@@ -230,7 +216,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 				}
 				return
 			}
-			err = s.Add(msg)
+			err = s.Add(msg, cmd[0] == CmdCAS)
 			if err != nil {
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				conn.Write([]byte("Error adding message\n"))

@@ -1,3 +1,4 @@
 Makefile
 k8s/
 bin/
+.DS_Store

@@ -47,7 +47,7 @@ func TestLoopbackClientInitReplaysExistingData(t *testing.T) {
 	if err := writer.Init(); err != nil {
 		t.Fatalf("writer.Init(): %v", err)
 	}
-	if err := writer.Publish("id-1", time.Now().UnixNano(), []byte("hello")); err != nil {
+	if err := writer.PublishLWW("id-1", time.Now().UnixNano(), []byte("hello")); err != nil {
 		t.Fatalf("writer.Publish(): %v", err)
 	}
 
@@ -125,10 +125,65 @@ func TestLoopbackClientClose(t *testing.T) {
 	if err := c.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("second Close() error = %v, want %v", err, os.ErrClosed)
 	}
-	if err := c.Publish("id-1", time.Now().UnixNano(), []byte("hello")); err == nil {
+	if err := c.PublishLWW("id-1", time.Now().UnixNano(), []byte("hello")); err == nil {
 		t.Fatal("Publish() after Close() unexpectedly succeeded")
 	}
 	if err := c.Signal("id-2", time.Now().UnixNano(), []byte("hello")); err == nil {
 		t.Fatal("Signal() after Close() unexpectedly succeeded")
+	}
+}
+
+func TestLoopbackClientPublishCASSucceedsAndAssignsNewTS(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "loopback.bin")
+	var seenTS []int64
+	c := &LoopbackClient{
+		LogFile: path,
+		OnMessage: func(id string, ts int64, data []byte) error {
+			seenTS = append(seenTS, ts)
+			return nil
+		},
+	}
+	if err := c.Init(); err != nil {
+		t.Fatalf("Init(): %v", err)
+	}
+
+	initialTS := time.Now().Add(-time.Second).UnixNano()
+	if err := c.PublishLWW("id-1", initialTS, []byte("first")); err != nil {
+		t.Fatalf("PublishLWW(): %v", err)
+	}
+	if err := c.PublishCAS("id-1", seenTS[0], []byte("second")); err != nil {
+		t.Fatalf("PublishCAS(): %v", err)
+	}
+
+	if len(seenTS) != 2 {
+		t.Fatalf("seenTS len = %d, want 2", len(seenTS))
+	}
+	if seenTS[1] == initialTS {
+		t.Fatal("CAS should assign a new timestamp")
+	}
+	if seenTS[1] <= seenTS[0] {
+		t.Fatalf("CAS timestamp = %d, want > %d", seenTS[1], seenTS[0])
+	}
+}
+
+func TestLoopbackClientPublishCASFailsOnMismatchedTS(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "loopback.bin")
+	c := &LoopbackClient{
+		LogFile: path,
+		OnMessage: func(id string, ts int64, data []byte) error {
+			return nil
+		},
+	}
+	if err := c.Init(); err != nil {
+		t.Fatalf("Init(): %v", err)
+	}
+
+	initialTS := time.Now().Add(-time.Second).UnixNano()
+	if err := c.PublishLWW("id-1", initialTS, []byte("first")); err != nil {
+		t.Fatalf("PublishLWW(): %v", err)
+	}
+
+	if err := c.PublishCAS("id-1", initialTS+1, []byte("second")); err == nil {
+		t.Fatal("PublishCAS() unexpectedly succeeded")
 	}
 }

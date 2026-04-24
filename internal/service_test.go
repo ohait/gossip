@@ -2,7 +2,9 @@ package gossip
 
 import (
 	"os"
+	"strings"
 	"testing"
+	"time"
 )
 
 func newTestService(t *testing.T) *Service {
@@ -24,7 +26,7 @@ func TestInitEmptyFolder(t *testing.T) {
 func TestAddStoresInIndex(t *testing.T) {
 	s := newTestService(t)
 	msg := Msg{ID: "msg-1", TS: 100, Data: []byte("hello")}
-	if err := s.Add(msg); err != nil {
+	if err := s.Add(msg, false); err != nil {
 		t.Fatal(err)
 	}
 	entry, ok := s.index["msg-1"]
@@ -41,8 +43,8 @@ func TestAddStoresInIndex(t *testing.T) {
 
 func TestAddHigherTSWins(t *testing.T) {
 	s := newTestService(t)
-	s.Add(Msg{ID: "x", TS: 1, Data: []byte("first")})
-	s.Add(Msg{ID: "x", TS: 2, Data: []byte("second")})
+	s.Add(Msg{ID: "x", TS: 1, Data: []byte("first")}, false)
+	s.Add(Msg{ID: "x", TS: 2, Data: []byte("second")}, false)
 	if entry := s.index["x"]; entry.TS != 2 {
 		t.Errorf("expected TS=2, got %d", entry.TS)
 	}
@@ -50,8 +52,8 @@ func TestAddHigherTSWins(t *testing.T) {
 
 func TestAddLowerTSIgnored(t *testing.T) {
 	s := newTestService(t)
-	s.Add(Msg{ID: "x", TS: 10, Data: []byte("newer")})
-	s.Add(Msg{ID: "x", TS: 5, Data: []byte("older")})
+	s.Add(Msg{ID: "x", TS: 10, Data: []byte("newer")}, false)
+	s.Add(Msg{ID: "x", TS: 5, Data: []byte("older")}, false)
 	if entry := s.index["x"]; entry.TS != 10 {
 		t.Errorf("expected index to keep TS=10, got %d", entry.TS)
 	}
@@ -59,8 +61,8 @@ func TestAddLowerTSIgnored(t *testing.T) {
 
 func TestAddEqualTSIgnored(t *testing.T) {
 	s := newTestService(t)
-	s.Add(Msg{ID: "x", TS: 10, Data: []byte("first")})
-	s.Add(Msg{ID: "x", TS: 10, Data: []byte("duplicate")})
+	s.Add(Msg{ID: "x", TS: 10, Data: []byte("first")}, false)
+	s.Add(Msg{ID: "x", TS: 10, Data: []byte("duplicate")}, false)
 	if entry := s.index["x"]; entry.TS != 10 {
 		t.Errorf("expected index to keep TS=10, got %d", entry.TS)
 	}
@@ -74,6 +76,49 @@ func TestAddEqualTSIgnored(t *testing.T) {
 	})
 	if count != 1 {
 		t.Errorf("expected 1 log entry for id=x, got %d", count)
+	}
+}
+
+func TestAddCASSucceedsAndAssignsNewTS(t *testing.T) {
+	s := newTestService(t)
+
+	initial := Msg{ID: "cas-1", TS: time.Now().Add(-time.Second).UnixNano(), Data: []byte("first")}
+	if err := s.Add(initial, false); err != nil {
+		t.Fatalf("Add(initial): %v", err)
+	}
+
+	prev := s.index[initial.ID]
+	if err := s.Add(Msg{ID: initial.ID, TS: prev.TS, Data: []byte("second")}, true); err != nil {
+		t.Fatalf("Add(CAS): %v", err)
+	}
+
+	entry := s.index[initial.ID]
+	if entry.TS == prev.TS {
+		t.Fatal("CAS should assign a new timestamp")
+	}
+	if entry.TS <= prev.TS {
+		t.Fatalf("entry.TS = %d, want > %d", entry.TS, prev.TS)
+	}
+}
+
+func TestAddCASFailsOnMismatchedTS(t *testing.T) {
+	s := newTestService(t)
+
+	initial := Msg{ID: "cas-1", TS: time.Now().Add(-time.Second).UnixNano(), Data: []byte("first")}
+	if err := s.Add(initial, false); err != nil {
+		t.Fatalf("Add(initial): %v", err)
+	}
+
+	prev := s.index[initial.ID]
+	err := s.Add(Msg{ID: initial.ID, TS: prev.TS + 1, Data: []byte("second")}, true)
+	if err == nil {
+		t.Fatal("Add(CAS) unexpectedly succeeded")
+	}
+	if !strings.Contains(err.Error(), "CAS failed") {
+		t.Fatalf("error = %v, want CAS failure", err)
+	}
+	if got := s.index[initial.ID].TS; got != prev.TS {
+		t.Fatalf("index TS = %d, want %d", got, prev.TS)
 	}
 }
 
@@ -122,7 +167,7 @@ func TestInitRebuildsIndex(t *testing.T) {
 		{ID: "c", TS: 30, Data: []byte("gamma")},
 	}
 	for _, m := range msgs {
-		if err := s1.Add(m); err != nil {
+		if err := s1.Add(m, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -201,7 +246,7 @@ func TestInitIndexEntriesPointToReadableData(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := Msg{ID: "readable", TS: 42, Data: []byte("some data")}
-	if err := s1.Add(want); err != nil {
+	if err := s1.Add(want, false); err != nil {
 		t.Fatal(err)
 	}
 	s1.log.f.Close()
@@ -237,7 +282,7 @@ func TestInitFailsOnCorruptedLogData(t *testing.T) {
 	if err := s1.Init(); err != nil {
 		t.Fatal(err)
 	}
-	if err := s1.Add(Msg{ID: "corrupt", TS: 1, Data: []byte("original data")}); err != nil {
+	if err := s1.Add(Msg{ID: "corrupt", TS: 1, Data: []byte("original data")}, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := s1.log.f.Close(); err != nil {

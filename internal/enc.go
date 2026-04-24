@@ -12,7 +12,8 @@ const (
 	HandshakePrefix = "GOSSIP"   // 6-byte prefix sent by the client
 	Handshake       = "GOSSIP\n" // 7-byte ack sent by the server
 
-	CmdMessage   = byte('M') // message command byte
+	CmdLWW   = byte('M') // last write wins message command byte
+	CmdCAS       = byte('C') // compare-and-swap command byte
 	CmdSignal    = byte('S') // signal (like a message, but not persisted or replayed)
 	CmdReplyDone = byte('D')
 
