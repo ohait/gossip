@@ -25,12 +25,11 @@ func TestE2E(t *testing.T) {
 	received := make(chan int.Msg, 1)
 	cli := &TCPClient{
 		Addr: addr,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			received <- int.Msg{ID: id, TS: ts, Data: data}
-			return nil
-		},
 	}
-	err = cli.Init()
+	err = cli.Init(func(topic, id string, ts int64, data []byte) error {
+		received <- int.Msg{ID: id, TS: ts, Data: data}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,12 +93,11 @@ func TestClientInitTimeout(t *testing.T) {
 	cli := &TCPClient{
 		Addr:    ln.Addr().String(),
 		Timeout: 50 * time.Millisecond,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			return nil
-		},
 	}
 
-	err = cli.Init()
+	err = cli.Init(func(topic, id string, ts int64, data []byte) error {
+		return nil
+	})
 	if err == nil {
 		t.Fatal("Init() unexpectedly succeeded")
 	}
@@ -144,23 +142,21 @@ func TestSignalE2EAndNoReplay(t *testing.T) {
 	received := make(chan int.Msg, 1)
 	receiver := &TCPClient{
 		Addr: addr,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			received <- int.Msg{ID: id, TS: ts, Data: data}
-			return nil
-		},
 	}
-	if err := receiver.Init(); err != nil {
+	if err := receiver.Init(func(topic, id string, ts int64, data []byte) error {
+		received <- int.Msg{ID: id, TS: ts, Data: data}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	defer receiver.Close()
 
 	sender := &TCPClient{
 		Addr: addr,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			return nil
-		},
 	}
-	if err := sender.Init(); err != nil {
+	if err := sender.Init(func(topic, id string, ts int64, data []byte) error {
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	defer sender.Close()
@@ -188,12 +184,11 @@ func TestSignalE2EAndNoReplay(t *testing.T) {
 	replayed := make(chan struct{}, 1)
 	reconnect := &TCPClient{
 		Addr: addr,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			replayed <- struct{}{}
-			return nil
-		},
 	}
-	if err := reconnect.Init(); err != nil {
+	if err := reconnect.Init(func(topic, id string, ts int64, data []byte) error {
+		replayed <- struct{}{}
+		return nil
+	}); err != nil {
 		t.Fatal(err)
 	}
 	defer reconnect.Close()
@@ -225,11 +220,10 @@ func TestInitErrorStopsLoop(t *testing.T) {
 
 	before := runtime.NumGoroutine()
 	cli := &TCPClient{
-		Addr:      ln.Addr().String(),
-		Timeout:   50 * time.Millisecond,
-		OnMessage: func(id string, ts int64, data []byte) error { return nil },
+		Addr:    ln.Addr().String(),
+		Timeout: 50 * time.Millisecond,
 	}
-	if err := cli.Init(); err == nil {
+	if err := cli.Init(func(topic, id string, ts int64, data []byte) error { return nil }); err == nil {
 		t.Fatal("Init() should have failed")
 	}
 

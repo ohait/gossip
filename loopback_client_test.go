@@ -8,22 +8,19 @@ import (
 	"time"
 )
 
-func TestLoopbackClientInitRequiresOnMessage(t *testing.T) {
+func TestLoopbackClientInitRequiresCallback(t *testing.T) {
 	c := &LoopbackClient{LogFile: filepath.Join(t.TempDir(), "loopback.bin")}
-	if err := c.Init(); err == nil {
+	if err := c.Init(nil); err == nil {
 		t.Fatal("Init() unexpectedly succeeded")
 	}
 }
 
 func TestLoopbackClientInitCreatesFileWithExpectedMode(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loopback.bin")
-	c := &LoopbackClient{
-		LogFile: path,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			return nil
-		},
-	}
-	if err := c.Init(); err != nil {
+	c := &LoopbackClient{LogFile: path}
+	if err := c.Init(func(topic, id string, ts int64, data []byte) error {
+		return nil
+	}); err != nil {
 		t.Fatalf("Init(): %v", err)
 	}
 
@@ -38,13 +35,10 @@ func TestLoopbackClientInitCreatesFileWithExpectedMode(t *testing.T) {
 
 func TestLoopbackClientInitReplaysExistingData(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loopback.bin")
-	writer := &LoopbackClient{
-		LogFile: path,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			return nil
-		},
-	}
-	if err := writer.Init(); err != nil {
+	writer := &LoopbackClient{LogFile: path}
+	if err := writer.Init(func(topic, id string, ts int64, data []byte) error {
+		return nil
+	}); err != nil {
 		t.Fatalf("writer.Init(): %v", err)
 	}
 	if err := writer.PublishLWW("id-1", time.Now().UnixNano(), []byte("hello")); err != nil {
@@ -52,17 +46,14 @@ func TestLoopbackClientInitReplaysExistingData(t *testing.T) {
 	}
 
 	var replayed int
-	reader := &LoopbackClient{
-		LogFile: path,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			replayed++
-			if id != "id-1" || string(data) != "hello" {
-				t.Fatalf("replayed (%q, %q), want (%q, %q)", id, string(data), "id-1", "hello")
-			}
-			return nil
-		},
-	}
-	if err := reader.Init(); err != nil {
+	reader := &LoopbackClient{LogFile: path}
+	if err := reader.Init(func(topic, id string, ts int64, data []byte) error {
+		replayed++
+		if id != "id-1" || string(data) != "hello" {
+			t.Fatalf("replayed (%q, %q), want (%q, %q)", id, string(data), "id-1", "hello")
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("reader.Init(): %v", err)
 	}
 	if replayed != 1 {
@@ -73,17 +64,14 @@ func TestLoopbackClientInitReplaysExistingData(t *testing.T) {
 func TestLoopbackClientSignalDoesNotPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loopback.bin")
 	var emitted int
-	writer := &LoopbackClient{
-		LogFile: path,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			emitted++
-			if id != "sig-1" || string(data) != "hello" {
-				t.Fatalf("emitted (%q, %q), want (%q, %q)", id, string(data), "sig-1", "hello")
-			}
-			return nil
-		},
-	}
-	if err := writer.Init(); err != nil {
+	writer := &LoopbackClient{LogFile: path}
+	if err := writer.Init(func(topic, id string, ts int64, data []byte) error {
+		emitted++
+		if id != "sig-1" || string(data) != "hello" {
+			t.Fatalf("emitted (%q, %q), want (%q, %q)", id, string(data), "sig-1", "hello")
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("writer.Init(): %v", err)
 	}
 	if err := writer.Signal("sig-1", time.Now().UnixNano(), []byte("hello")); err != nil {
@@ -94,14 +82,11 @@ func TestLoopbackClientSignalDoesNotPersist(t *testing.T) {
 	}
 
 	var replayed int
-	reader := &LoopbackClient{
-		LogFile: path,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			replayed++
-			return nil
-		},
-	}
-	if err := reader.Init(); err != nil {
+	reader := &LoopbackClient{LogFile: path}
+	if err := reader.Init(func(topic, id string, ts int64, data []byte) error {
+		replayed++
+		return nil
+	}); err != nil {
 		t.Fatalf("reader.Init(): %v", err)
 	}
 	if replayed != 0 {
@@ -110,13 +95,10 @@ func TestLoopbackClientSignalDoesNotPersist(t *testing.T) {
 }
 
 func TestLoopbackClientClose(t *testing.T) {
-	c := &LoopbackClient{
-		LogFile: filepath.Join(t.TempDir(), "loopback.bin"),
-		OnMessage: func(id string, ts int64, data []byte) error {
-			return nil
-		},
-	}
-	if err := c.Init(); err != nil {
+	c := &LoopbackClient{LogFile: filepath.Join(t.TempDir(), "loopback.bin")}
+	if err := c.Init(func(topic, id string, ts int64, data []byte) error {
+		return nil
+	}); err != nil {
 		t.Fatalf("Init(): %v", err)
 	}
 	if err := c.Close(); err != nil {
@@ -136,14 +118,11 @@ func TestLoopbackClientClose(t *testing.T) {
 func TestLoopbackClientPublishCASSucceedsAndAssignsNewTS(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loopback.bin")
 	var seenTS []int64
-	c := &LoopbackClient{
-		LogFile: path,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			seenTS = append(seenTS, ts)
-			return nil
-		},
-	}
-	if err := c.Init(); err != nil {
+	c := &LoopbackClient{LogFile: path}
+	if err := c.Init(func(topic, id string, ts int64, data []byte) error {
+		seenTS = append(seenTS, ts)
+		return nil
+	}); err != nil {
 		t.Fatalf("Init(): %v", err)
 	}
 
@@ -168,13 +147,10 @@ func TestLoopbackClientPublishCASSucceedsAndAssignsNewTS(t *testing.T) {
 
 func TestLoopbackClientPublishCASFailsOnMismatchedTS(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "loopback.bin")
-	c := &LoopbackClient{
-		LogFile: path,
-		OnMessage: func(id string, ts int64, data []byte) error {
-			return nil
-		},
-	}
-	if err := c.Init(); err != nil {
+	c := &LoopbackClient{LogFile: path}
+	if err := c.Init(func(topic, id string, ts int64, data []byte) error {
+		return nil
+	}); err != nil {
 		t.Fatalf("Init(): %v", err)
 	}
 

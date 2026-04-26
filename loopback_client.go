@@ -9,19 +9,20 @@ import (
 )
 
 type LoopbackClient struct {
-	log       *gi.Log
-	LogFile   string
-	OnMessage func(id string, ts int64, data []byte) error
-	Log       func(format string, args ...any)
+	log     *gi.Log
+	LogFile string
+	Log     func(format string, args ...any)
+	cb      func(topic, id string, ts int64, data []byte) error
 }
 
 var _ Client = (*LoopbackClient)(nil)
 
 // Init prepare the log and replay any previous data
-func (c *LoopbackClient) Init() error {
-	if c.OnMessage == nil {
-		return fmt.Errorf("missing OnMessage callback")
+func (c *LoopbackClient) Init(cb func(topic, id string, ts int64, data []byte) error) error {
+	if cb == nil {
+		return fmt.Errorf("missing callback")
 	}
+	c.cb = cb
 	log, err := gi.AppendLog(c.LogFile)
 	if err != nil {
 		return err
@@ -31,7 +32,7 @@ func (c *LoopbackClient) Init() error {
 		if prev, ok := latestTS[m.ID]; !ok || prev < m.TS {
 			latestTS[m.ID] = m.TS
 		}
-		return c.OnMessage(m.ID, m.TS, m.Data)
+		return c.cb(m.Topic, m.ID, m.TS, m.Data)
 	})
 	if err != nil {
 		log.Close()
@@ -54,7 +55,7 @@ func (c *LoopbackClient) Signal(id string, ts int64, data []byte) error {
 	if c.log == nil {
 		return fmt.Errorf("client not initialized")
 	}
-	return c.OnMessage(id, ts, data)
+	return c.cb("", id, ts, data)
 }
 
 func (c *LoopbackClient) PublishCAS(id string, ts int64, data []byte) error {
@@ -82,10 +83,7 @@ func (c *LoopbackClient) PublishCAS(id string, ts int64, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if c.OnMessage != nil {
-		return c.OnMessage(id, newTs, data)
-	}
-	return nil
+	return c.cb("", id, newTs, data)
 }
 
 func (c *LoopbackClient) PublishLWW(id string, ts int64, data []byte) error {
@@ -108,8 +106,5 @@ func (c *LoopbackClient) PublishLWW(id string, ts int64, data []byte) error {
 	if err != nil {
 		return err
 	}
-	if c.OnMessage != nil {
-		return c.OnMessage(id, ts, data)
-	}
-	return nil
+	return c.cb("", id, ts, data)
 }

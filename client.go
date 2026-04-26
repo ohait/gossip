@@ -20,7 +20,7 @@ const (
 
 type Client interface {
 	// Setup the client and reply the history, blocks until the replay is completed
-	Init() error
+	Init(func(topic, id string, ts int64, data []byte) error) error
 
 	// PublishLWW broadcasts data and persists it using last write wins
 	PublishLWW(id string, ts_epoch_ns int64, data []byte) error
@@ -48,23 +48,21 @@ type TCPClient struct {
 	Timeout      time.Duration // per network operation; default 10s
 	ReplayMargin time.Duration // replay messages starting from LastTS-ReplayMargin; default 5s
 	LastTS       int64         // nanoseconds epoch: server will replay all messages with TS > Since - ReplayMargin
-	OnMessage    func(id string, ts int64, data []byte) error
+	cb    func(topic, id string, ts int64, data []byte) error
 
 	replayErr chan error
 }
 
 var _ Client = (*TCPClient)(nil)
 
-func (c *TCPClient) Init() error {
+func (c *TCPClient) Init(cb func(topic, id string, ts int64, data []byte) error) error {
 	if c.done != nil {
 		return fmt.Errorf("client already initialized")
 	}
 	if c.Addr == "" {
 		return fmt.Errorf("missing Addr")
 	}
-	if c.OnMessage == nil {
-		return fmt.Errorf("missing OnMessage callback")
-	}
+	c.cb = cb
 	c.done = make(chan struct{})
 	if c.ReplayMargin == 0 {
 		c.ReplayMargin = 5 * time.Second
@@ -176,8 +174,8 @@ func (c *TCPClient) handleIncoming(conn net.Conn, persist bool) error {
 	if persist && c.LastTS < msg.TS {
 		c.LastTS = msg.TS // move Since forward only for replayable data
 	}
-	if c.OnMessage != nil {
-		return c.OnMessage(msg.ID, msg.TS, data)
+	if c.cb != nil {
+		return c.cb(msg.Topic, msg.ID, msg.TS, data)
 	}
 	return nil
 }
