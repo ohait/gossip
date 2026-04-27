@@ -41,7 +41,7 @@ func TestLoopbackClientInitReplaysExistingData(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("writer.Init(): %v", err)
 	}
-	if err := writer.PublishLWW("id-1", time.Now().UnixNano(), []byte("hello")); err != nil {
+	if err := writer.PublishLWW("", "id-1", time.Now().UnixNano(), []byte("hello")); err != nil {
 		t.Fatalf("writer.Publish(): %v", err)
 	}
 
@@ -74,7 +74,7 @@ func TestLoopbackClientSignalDoesNotPersist(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("writer.Init(): %v", err)
 	}
-	if err := writer.Signal("sig-1", time.Now().UnixNano(), []byte("hello")); err != nil {
+	if err := writer.Signal("", "sig-1", time.Now().UnixNano(), []byte("hello")); err != nil {
 		t.Fatalf("writer.Signal(): %v", err)
 	}
 	if emitted != 1 {
@@ -107,10 +107,10 @@ func TestLoopbackClientClose(t *testing.T) {
 	if err := c.Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("second Close() error = %v, want %v", err, os.ErrClosed)
 	}
-	if err := c.PublishLWW("id-1", time.Now().UnixNano(), []byte("hello")); err == nil {
+	if err := c.PublishLWW("", "id-1", time.Now().UnixNano(), []byte("hello")); err == nil {
 		t.Fatal("Publish() after Close() unexpectedly succeeded")
 	}
-	if err := c.Signal("id-2", time.Now().UnixNano(), []byte("hello")); err == nil {
+	if err := c.Signal("", "id-2", time.Now().UnixNano(), []byte("hello")); err == nil {
 		t.Fatal("Signal() after Close() unexpectedly succeeded")
 	}
 }
@@ -127,10 +127,10 @@ func TestLoopbackClientPublishCASSucceedsAndAssignsNewTS(t *testing.T) {
 	}
 
 	initialTS := time.Now().Add(-time.Second).UnixNano()
-	if err := c.PublishLWW("id-1", initialTS, []byte("first")); err != nil {
+	if err := c.PublishLWW("", "id-1", initialTS, []byte("first")); err != nil {
 		t.Fatalf("PublishLWW(): %v", err)
 	}
-	if err := c.PublishCAS("id-1", seenTS[0], []byte("second")); err != nil {
+	if err := c.PublishCAS("", "id-1", seenTS[0], []byte("second")); err != nil {
 		t.Fatalf("PublishCAS(): %v", err)
 	}
 
@@ -155,11 +155,11 @@ func TestLoopbackClientPublishCASFailsOnMismatchedTS(t *testing.T) {
 	}
 
 	initialTS := time.Now().Add(-time.Second).UnixNano()
-	if err := c.PublishLWW("id-1", initialTS, []byte("first")); err != nil {
+	if err := c.PublishLWW("", "id-1", initialTS, []byte("first")); err != nil {
 		t.Fatalf("PublishLWW(): %v", err)
 	}
 
-	if err := c.PublishCAS("id-1", initialTS+1, []byte("second")); err == nil {
+	if err := c.PublishCAS("", "id-1", initialTS+1, []byte("second")); err == nil {
 		t.Fatal("PublishCAS() unexpectedly succeeded")
 	}
 }

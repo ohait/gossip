@@ -23,15 +23,15 @@ type Client interface {
 	Init(func(topic, id string, ts int64, data []byte) error) error
 
 	// PublishLWW broadcasts data and persists it using last write wins
-	PublishLWW(id string, ts_epoch_ns int64, data []byte) error
+	PublishLWW(topic, id string, ts_epoch_ns int64, data []byte) error
 
 	// PublishCAS broadcasts data and persists it using compare-and-swap
 	// the ts_epoch_ns is expected to match the old one (or zero for new entries)
 	// the data will then get a new ts_epoch_ns assigned if succeed
-	PublishCAS(id string, ts_epoch_ns int64, data []byte) error
+	PublishCAS(topic, id string, ts_epoch_ns int64, data []byte) error
 
 	// Signal broadcasts transient data without persisting it.
-	Signal(id string, ts_epoch_ns int64, data []byte) error
+	Signal(topic, id string, ts_epoch_ns int64, data []byte) error
 
 	// Close the client
 	Close() error
@@ -48,7 +48,7 @@ type TCPClient struct {
 	Timeout      time.Duration // per network operation; default 10s
 	ReplayMargin time.Duration // replay messages starting from LastTS-ReplayMargin; default 5s
 	LastTS       int64         // nanoseconds epoch: server will replay all messages with TS > Since - ReplayMargin
-	cb    func(topic, id string, ts int64, data []byte) error
+	cb           func(topic, id string, ts int64, data []byte) error
 
 	replayErr chan error
 }
@@ -236,40 +236,20 @@ func (c *TCPClient) connect() (net.Conn, error) {
 
 // PublishLWW writes durable data to the server with automatic retry on failure.
 // TODO: accept a context.Context to allow cancellation during retries.
-func (c *TCPClient) PublishLWW(id string, ts int64, data []byte) error {
-	return c.sendWithCmd(gi.CmdLWW, id, ts, data)
+func (c *TCPClient) PublishLWW(topic, id string, ts int64, data []byte) error {
+	return c.send(gi.CmdLWW, topic, id, ts, data)
 }
 
-func (c *TCPClient) PublishCAS(id string, ts int64, data []byte) error {
-	return c.sendWithCmd(gi.CmdCAS, id, ts, data)
+func (c *TCPClient) PublishCAS(topic, id string, ts int64, data []byte) error {
+	return c.send(gi.CmdCAS, topic, id, ts, data)
 }
 
 // Signal writes transient data to the server with automatic retry on failure.
-func (c *TCPClient) Signal(id string, ts int64, data []byte) error {
-	return c.sendWithCmd(gi.CmdSignal, id, ts, data)
+func (c *TCPClient) Signal(topic, id string, ts int64, data []byte) error {
+	return c.send(gi.CmdSignal, topic, id, ts, data)
 }
 
-func (c *TCPClient) sendWithCmd(cmd byte, id string, ts int64, data []byte) error {
-	var firstError error
-	for i := 1; i <= 5; i++ {
-		err := c.send(cmd, id, ts, data)
-		if err == nil {
-			return nil
-		}
-		if firstError == nil {
-			firstError = err
-		}
-		c.m.Lock()
-		if c.conn != nil {
-			c.conn.Close() // force reconnect after any write error
-		}
-		c.m.Unlock()
-		time.Sleep(time.Second * time.Duration(i*i/2)) // 500ms, 2s, 4.5s, 8s, 12.5s (should be enough for a full restart of gossip server)
-	}
-	return fmt.Errorf("after 5 retries: %w", firstError)
-}
-
-func (c *TCPClient) send(cmd byte, id string, ts int64, data []byte) error {
+func (c *TCPClient) send(cmd byte, topic, id string, ts int64, data []byte) error {
 	if c.close.Load() {
 		return os.ErrClosed
 	}
@@ -287,7 +267,7 @@ func (c *TCPClient) send(cmd byte, id string, ts int64, data []byte) error {
 		return err
 	}
 	defer conn.SetWriteDeadline(time.Time{})
-	msg := gi.Msg{ID: id, TS: ts, Data: data}
+	msg := gi.Msg{Topic: topic, ID: id, TS: ts, Data: data}
 	_, err = msg.WriteTo(conn, cmd)
 	return err
 }

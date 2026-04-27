@@ -51,14 +51,14 @@ func (c *LoopbackClient) Close() error {
 	return err
 }
 
-func (c *LoopbackClient) Signal(id string, ts int64, data []byte) error {
+func (c *LoopbackClient) Signal(topic, id string, ts int64, data []byte) error {
 	if c.log == nil {
 		return fmt.Errorf("client not initialized")
 	}
-	return c.cb("", id, ts, data)
+	return c.cb(topic, id, ts, data)
 }
 
-func (c *LoopbackClient) PublishCAS(id string, ts int64, data []byte) error {
+func (c *LoopbackClient) PublishCAS(topic, id string, ts int64, data []byte) error {
 	if c.log == nil {
 		return fmt.Errorf("client not initialized")
 	}
@@ -72,9 +72,10 @@ func (c *LoopbackClient) PublishCAS(id string, ts int64, data []byte) error {
 		return fmt.Errorf("LWW timestamp = %d, want >= now", newTs)
 	}
 	_, err := c.log.Append(gi.Msg{
-		ID:   id,
-		TS:   newTs,
-		Data: data,
+		Topic: topic,
+		ID:    id,
+		TS:    newTs,
+		Data:  data,
 	})
 	if err != nil {
 		return err
@@ -83,10 +84,10 @@ func (c *LoopbackClient) PublishCAS(id string, ts int64, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.cb("", id, newTs, data)
+	return c.cb(topic, id, newTs, data)
 }
 
-func (c *LoopbackClient) PublishLWW(id string, ts int64, data []byte) error {
+func (c *LoopbackClient) PublishLWW(topic, id string, ts int64, data []byte) error {
 	if c.log == nil {
 		return fmt.Errorf("client not initialized")
 	}
@@ -95,9 +96,10 @@ func (c *LoopbackClient) PublishLWW(id string, ts int64, data []byte) error {
 		return nil // silently ignore old updates
 	}
 	_, err := c.log.Append(gi.Msg{
-		ID:   id,
-		TS:   ts,
-		Data: data,
+		Topic: topic,
+		ID:    id,
+		TS:    ts,
+		Data:  data,
 	})
 	if err != nil {
 		return err
@@ -106,5 +108,5 @@ func (c *LoopbackClient) PublishLWW(id string, ts int64, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return c.cb("", id, ts, data)
+	return c.cb(topic, id, ts, data)
 }

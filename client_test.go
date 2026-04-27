@@ -53,7 +53,7 @@ func TestE2E(t *testing.T) {
 		// poll until the client has connected and the send succeeds
 		var sendErr error
 		for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-			if sendErr = cli.PublishLWW(tt.ID, tt.TS, tt.Data); sendErr == nil {
+			if sendErr = cli.PublishLWW("", tt.ID, tt.TS, tt.Data); sendErr == nil {
 				break
 			}
 		}
@@ -119,7 +119,7 @@ func TestClientSendTimeout(t *testing.T) {
 	}
 
 	data := make([]byte, 1<<20)
-	err := cli.send(int.CmdLWW, "msg-1", 1, data)
+	err := cli.send(int.CmdLWW, "", "msg-1", 1, data)
 	if err == nil {
 		t.Fatal("send() unexpectedly succeeded")
 	}
@@ -164,7 +164,7 @@ func TestSignalE2EAndNoReplay(t *testing.T) {
 	want := int.Msg{ID: "sig-1", TS: 42, Data: []byte("flash")}
 	var sendErr error
 	for deadline := time.Now().Add(time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
-		if sendErr = sender.Signal(want.ID, want.TS, want.Data); sendErr == nil {
+		if sendErr = sender.Signal("", want.ID, want.TS, want.Data); sendErr == nil {
 			break
 		}
 	}

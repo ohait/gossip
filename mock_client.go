@@ -21,7 +21,7 @@ func (c *MockClient) Init(cb func(topic, id string, ts int64, data []byte) error
 	return nil
 }
 
-func (c *MockClient) PublishCAS(id string, ts int64, data []byte) error {
+func (c *MockClient) PublishCAS(topic, id string, ts int64, data []byte) error {
 	c.m.Lock()
 	last := c.last[id]
 	if last != ts {
@@ -31,10 +31,10 @@ func (c *MockClient) PublishCAS(id string, ts int64, data []byte) error {
 	ts = time.Now().UnixNano()
 	c.last[id] = ts
 	c.m.Unlock()
-	return c.cb("", id, ts, data)
+	return c.cb(topic, id, ts, data)
 }
 
-func (c *MockClient) PublishLWW(id string, ts int64, data []byte) error {
+func (c *MockClient) PublishLWW(topic, id string, ts int64, data []byte) error {
 	c.m.Lock()
 	if ts < c.last[id] {
 		c.m.Unlock()
@@ -46,11 +46,11 @@ func (c *MockClient) PublishLWW(id string, ts int64, data []byte) error {
 	}
 	c.last[id] = ts
 	c.m.Unlock()
-	return c.cb("", id, ts, data)
+	return c.cb(topic, id, ts, data)
 }
 
-func (c *MockClient) Signal(id string, ts int64, data []byte) error {
-	return c.cb("", id, ts, data)
+func (c *MockClient) Signal(topic, id string, ts int64, data []byte) error {
+	return c.cb(topic, id, ts, data)
 }
 
 func (c *MockClient) Close() error {
