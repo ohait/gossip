@@ -1,7 +1,9 @@
 package gossip
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +237,107 @@ func TestInitKeepsHighestTSAcrossLogs(t *testing.T) {
 	}
 	if entry.File != newerEntry.File || entry.Offset != newerEntry.Offset {
 		t.Fatalf("entry = %+v, want file=%q offset=%d", entry, newerEntry.File, newerEntry.Offset)
+	}
+}
+
+func TestInitCompactsOldEntries(t *testing.T) {
+	dir := t.TempDir()
+
+	oldPath := filepath.Join(dir, "a-old.bin")
+	oldLog, err := CreateLog(oldPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		if _, err := oldLog.Append(Msg{ID: fmt.Sprintf("stale-%02d", i), TS: int64(i + 1), Data: []byte("old")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		if _, err := oldLog.Append(Msg{ID: fmt.Sprintf("keep-%02d", i), TS: int64(i + 1), Data: []byte("keep")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := oldLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	newPath := filepath.Join(dir, "z-new.bin")
+	newLog, err := CreateLog(newPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 10; i++ {
+		msg := Msg{ID: fmt.Sprintf("stale-%02d", i), TS: int64(100 + i), Data: []byte("new")}
+		if _, err := newLog.Append(msg); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := newLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	s := &Service{LogsFolder: dir}
+	if err := s.Init(); err != nil {
+		t.Fatal(err)
+	}
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.bin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("got %d log files after compaction, want 1: %v", len(files), files)
+	}
+	if files[0] == oldPath || files[0] == newPath {
+		t.Fatalf("compaction kept original log file %q", files[0])
+	}
+
+	compacted, err := OpenLog(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer compacted.Close()
+
+	seen := map[string]Msg{}
+	if err := compacted.Range(func(id string, entry IndexEntry) error {
+		msg, err := compacted.Read(entry.Offset)
+		if err != nil {
+			return err
+		}
+		seen[id] = msg
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(seen) != 13 {
+		t.Fatalf("compacted log has %d entries, want 13", len(seen))
+	}
+	for i := 0; i < 10; i++ {
+		id := fmt.Sprintf("stale-%02d", i)
+		msg, ok := seen[id]
+		if !ok {
+			t.Fatalf("missing compacted entry %q", id)
+		}
+		if msg.TS != int64(100+i) || string(msg.Data) != "new" {
+			t.Fatalf("%s = %+v, want TS=%d data=new", id, msg, 100+i)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("keep-%02d", i)
+		msg, ok := seen[id]
+		if !ok {
+			t.Fatalf("missing compacted entry %q", id)
+		}
+		if msg.TS != int64(i+1) || string(msg.Data) != "keep" {
+			t.Fatalf("%s = %+v, want TS=%d data=keep", id, msg, i+1)
+		}
+	}
+	for id, entry := range s.index {
+		if entry.File != files[0] {
+			t.Fatalf("index[%q].File = %q, want compacted file %q", id, entry.File, files[0])
+		}
 	}
 }
 

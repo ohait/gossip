@@ -52,9 +52,16 @@ func (s *Service) Init() error {
 	tot := 0
 	t0 := time.Now()
 	replayNow := t0.UnixNano()
+
+	oldFiles := []string{}
 	for _, file := range files {
-		log.Printf("scanning %s\n", file.Name())
+		size := 0
+		if info, _ := file.Info(); info != nil {
+			size = int(info.Size())
+		}
+		log.Printf("scanning %s (%d bytes)\n", file.Name(), size)
 		if filepath.Ext(file.Name()) == ".bin" {
+			oldFiles = append(oldFiles, file.Name())
 			path := filepath.Join(s.LogsFolder, file.Name())
 			lg, err := OpenLog(path)
 			if err != nil {
@@ -83,6 +90,55 @@ func (s *Service) Init() error {
 		}
 	}
 	log.Printf("replayed %d messages (%d old) in %s\n", tot, old, time.Since(t0))
+	if old < 10 {
+		return nil
+	}
+
+	err = s.replay(0, func(msg Msg) error {
+		if s.log == nil {
+			path := filepath.Join(s.LogsFolder, fmt.Sprintf("log-%x.bin", time.Now().UnixNano()))
+			var err error
+			s.log, err = CreateLog(path)
+			if err != nil {
+				return err
+			}
+		}
+		entry, err := s.log.Append(msg)
+		if err != nil {
+			return err
+		}
+		s.index[msg.ID] = entry
+		if err := s.log.Flush(); err != nil {
+			return err
+		}
+		if entry.Offset > 200*1024*1024 {
+			if err := s.log.Close(); err != nil {
+				return err
+			}
+			s.log = nil
+		}
+		return nil
+	})
+	if err != nil {
+		log.Printf("Error compacting messages: %v", err)
+		return err
+	}
+	if s.log != nil {
+		if err := s.log.Close(); err != nil {
+			return err
+		}
+		s.log = nil
+	}
+	log.Printf("compacted messages")
+
+	for _, file := range oldFiles {
+		err := os.Remove(filepath.Join(s.LogsFolder, file))
+		if err != nil {
+			return err
+		}
+	}
+
+	log.Printf("compacted %d messages in %s\n", tot, time.Since(t0))
 	return nil
 }
 

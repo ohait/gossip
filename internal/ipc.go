@@ -90,7 +90,7 @@ func (s *Service) Bind(addr string) (string, error) {
 	return ln.Addr().String(), nil
 }
 
-func (s *Service) replay(since int64, conn net.Conn) error {
+func (s *Service) replay(since int64, f func(Msg) error) error {
 	files := map[string]struct{}{}
 	ts := map[string]int64{}
 	s.m.Lock()
@@ -110,18 +110,14 @@ func (s *Service) replay(since int64, conn net.Conn) error {
 			if msg.TS != ts[msg.ID] {
 				return nil // skip older versions of the same ID
 			}
-			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			_, err := msg.WriteTo(conn, CmdLWW)
-			return err
+			return f(msg)
 		})
 		l.Close()
 		if err != nil {
 			return err
 		}
 	}
-	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-	_, err := conn.Write([]byte{CmdReplyDone})
-	return err
+	return nil
 }
 
 func (s *Service) handleConnection(conn net.Conn) {
@@ -164,7 +160,19 @@ func (s *Service) handleConnection(conn net.Conn) {
 			log.Printf("Closing connection to %s", conn.RemoteAddr().String())
 			conn.Close()
 		}()
-		if err := s.replay(since, conn); err != nil {
+
+		err := s.replay(since, func(msg Msg) error {
+			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+			_, err := msg.WriteTo(conn, CmdLWW)
+			return err
+		})
+		if err != nil {
+			log.Printf("Error replaying messages: %v", err)
+			return
+		}
+		conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_, err = conn.Write([]byte{CmdReplyDone})
+		if err != nil {
 			log.Printf("Error replaying messages: %v", err)
 			return
 		}
