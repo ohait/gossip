@@ -3,6 +3,7 @@ package gossip
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"runtime"
 	"strings"
@@ -126,6 +127,85 @@ func TestClientSendTimeout(t *testing.T) {
 	var netErr net.Error
 	if !errors.As(err, &netErr) || !netErr.Timeout() {
 		t.Fatalf("send() error = %v, want timeout", err)
+	}
+}
+
+func TestClientSendErrorClearsConnection(t *testing.T) {
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	clientConn.Close()
+
+	cli := &TCPClient{
+		Timeout: 50 * time.Millisecond,
+		conn:    clientConn,
+	}
+
+	err := cli.send(int.CmdLWW, "", "msg-1", 1, []byte("hello"))
+	if err == nil {
+		t.Fatal("send() unexpectedly succeeded")
+	}
+	if cli.conn != nil {
+		t.Fatal("send() left a failed connection installed")
+	}
+}
+
+func TestClientIdleReadTimeoutReturns(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- conn
+	}()
+
+	cli := &TCPClient{
+		Addr:    ln.Addr().String(),
+		Timeout: 50 * time.Millisecond,
+		Log:     func(string, ...any) {},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cli.connectAndReceive()
+	}()
+
+	conn := <-accepted
+	defer conn.Close()
+	var prefix [len(int.HandshakePrefix)]byte
+	if _, err := io.ReadFull(conn, prefix[:]); err != nil {
+		t.Fatal(err)
+	}
+	if string(prefix[:]) != int.HandshakePrefix {
+		t.Fatalf("handshake prefix = %q, want %q", string(prefix[:]), int.HandshakePrefix)
+	}
+	if _, err := int.ReadInt64(conn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte(int.Handshake)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write([]byte{int.CmdReplyDone}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		var netErr net.Error
+		if !errors.As(err, &netErr) || !netErr.Timeout() {
+			t.Fatalf("connectAndReceive() error = %v, want timeout", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connectAndReceive() did not return after idle read timeout")
+	}
+	if cli.conn != nil {
+		t.Fatal("connectAndReceive() left timed out connection installed")
 	}
 }
 

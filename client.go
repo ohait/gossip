@@ -45,7 +45,7 @@ type TCPClient struct {
 
 	Log          func(format string, args ...any)
 	Addr         string
-	Timeout      time.Duration // per network operation; default 10s
+	Timeout      time.Duration // per network operation and idle read timeout; default 10s
 	ReplayMargin time.Duration // replay messages starting from LastTS-ReplayMargin; default 5s
 	LastTS       int64         // nanoseconds epoch: server will replay all messages with TS > Since - ReplayMargin
 	cb           func(topic, id string, ts int64, data []byte) error
@@ -126,17 +126,10 @@ func (c *TCPClient) connectAndReceive() error {
 	c.conn = conn
 	c.m.Unlock()
 
-	defer func() {
-		c.m.Lock()
-		if c.conn == conn {
-			c.conn = nil
-		}
-		c.m.Unlock()
-		conn.Close()
-	}()
+	defer c.closeConn(conn)
 	var cmd [1]byte
 	for {
-		conn.SetReadDeadline(time.Time{}) // no timeout between messages
+		conn.SetReadDeadline(time.Now().Add(c.timeout())) // idle timeout to detect dead connections
 		_, err := io.ReadFull(conn, cmd[:])
 		if err != nil {
 			return err
@@ -249,6 +242,15 @@ func (c *TCPClient) Signal(topic, id string, ts int64, data []byte) error {
 	return c.send(gi.CmdSignal, topic, id, ts, data)
 }
 
+func (c *TCPClient) closeConn(conn net.Conn) {
+	c.m.Lock()
+	if c.conn == conn {
+		c.conn = nil
+	}
+	c.m.Unlock()
+	conn.Close()
+}
+
 func (c *TCPClient) send(cmd byte, topic, id string, ts int64, data []byte) error {
 	if c.close.Load() {
 		return os.ErrClosed
@@ -264,11 +266,19 @@ func (c *TCPClient) send(cmd byte, topic, id string, ts int64, data []byte) erro
 		return fmt.Errorf("not connected")
 	}
 	if err := conn.SetWriteDeadline(time.Now().Add(c.timeout())); err != nil {
+		if c.conn == conn {
+			c.conn = nil
+			conn.Close()
+		}
 		return err
 	}
 	defer conn.SetWriteDeadline(time.Time{})
 	msg := gi.Msg{Topic: topic, ID: id, TS: ts, Data: data}
 	_, err = msg.WriteTo(conn, cmd)
+	if err != nil && c.conn == conn {
+		c.conn = nil
+		conn.Close()
+	}
 	return err
 }
 
