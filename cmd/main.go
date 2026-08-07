@@ -8,7 +8,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	gossip "github.com/ohait/gossip/internal"
+	"github.com/ohait/gossip/lib"
+	gossip "github.com/ohait/gossip/net"
 )
 
 func main() {
@@ -16,15 +17,18 @@ func main() {
 	flag.Parse()
 
 	logsFolder := flag.Arg(0)
+
 	if logsFolder == "" {
 		fmt.Fprintln(os.Stderr, "usage: gossip [-l addr] <logs-folder>")
 		os.Exit(1)
 	}
 
-	s := &gossip.Service{
-		LogsFolder: logsFolder,
+	s := &gossip.Server{
+		G: &lib.Gossip{LogsFolder: logsFolder},
 	}
+
 	err := s.Init()
+
 	if err != nil {
 		panic(err)
 	}

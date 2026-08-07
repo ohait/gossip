@@ -1,4 +1,4 @@
-package gossip
+package lib
 
 import (
 	"errors"
@@ -13,6 +13,13 @@ type Log struct {
 	path string
 	f    *os.File
 	v    int
+}
+
+type Msg struct {
+	Topic string // max 1024 bytes
+	ID    string // max 1024 bytes
+	TS    int64
+	Data  []byte
 }
 
 func CreateLog(path string) (*Log, error) {

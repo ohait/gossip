@@ -1,68 +1,69 @@
-package gossip
+package net
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
+
+	"github.com/ohait/gossip/lib"
 )
 
-type Msg struct {
-	Topic string // max 1024 bytes
-	ID    string // max 1024 bytes
-	TS    int64
-	Data  []byte
+type Server struct {
+	G       *lib.Gossip
+	MaxData int
+	m       sync.Mutex
+	clients map[string]chan<- Outbound
 }
 
-func (m Msg) WriteTo(w io.Writer, cmd byte) (n int64, err error) {
-	_, err = w.Write([]byte{cmd})
-	if err != nil {
-		return
-	}
-	err = WriteID(w, m.Topic)
-	if err != nil {
-		return
-	}
-	err = WriteID(w, m.ID)
-	if err != nil {
-		return
-	}
-	err = WriteInt64(w, m.TS)
-	if err != nil {
-		return
-	}
-	err = WriteBytes(w, m.Data)
-	if err != nil {
-		return
-	}
-	return 1 + int64(len(m.ID)) + 8 + 8 + int64(len(m.Data)), nil
+type Outbound struct {
+	Cmd byte
+	Msg lib.Msg
 }
 
-func (m *Msg) Decode(r io.Reader, maxSize int) (n int64, err error) {
-	m.Topic, err = ReadID(r)
-	if err != nil {
-		return
+func (s *Server) Init() error {
+	if s.G == nil {
+		return fmt.Errorf("tcp: Gossip is nil")
 	}
-	m.ID, err = ReadID(r)
-	if err != nil {
-		return
+	if s.MaxData == 0 {
+		s.MaxData = 10 * 1024 * 1024
 	}
-	m.TS, err = ReadInt64(r)
-	if err != nil {
-		return
+
+	s.m.Lock()
+	s.clients = make(map[string]chan<- Outbound)
+	s.m.Unlock()
+
+	return s.G.Init(func(topic, id string, ts int64, data []byte) error {
+		s.broadcast(CmdLWW, lib.Msg{Topic: topic, ID: id, TS: ts, Data: data})
+		return nil
+	})
+}
+
+func (s *Server) broadcast(cmd byte, msg lib.Msg) {
+	s.m.Lock()
+	defer s.m.Unlock()
+	for _, inbox := range s.clients {
+		select {
+		case inbox <- Outbound{Cmd: cmd, Msg: msg}:
+		default:
+		}
 	}
-	m.Data, err = ReadBytes(r, maxSize)
-	if err != nil {
-		return
-	}
-	n = int64(len(m.ID)) + 8 + 8 + int64(len(m.Data))
-	return
 }
 
 // Bind starts a TCP server on the specified address and listens for incoming connections.
 // Returns the address actually bound (useful when addr is "host:0" for a random port).
-func (s *Service) Bind(addr string) (string, error) {
+func (s *Server) Bind(addr string) (string, error) {
+	s.m.Lock()
+	initialized := s.clients != nil
+	s.m.Unlock()
+	if !initialized {
+		// Without this the first connection would panic assigning into a nil
+		// map, long after the mistake was made.
+		return "", fmt.Errorf("tcp: Bind called before Init")
+	}
 	ln, err := net.Listen("tcp", addr)
 	if err != nil {
 		return "", err
@@ -90,37 +91,7 @@ func (s *Service) Bind(addr string) (string, error) {
 	return ln.Addr().String(), nil
 }
 
-func (s *Service) replay(since int64, f func(Msg) error) error {
-	files := map[string]struct{}{}
-	ts := map[string]int64{}
-	s.m.Lock()
-	for id, entry := range s.index {
-		if entry.TS >= since {
-			ts[id] = entry.TS
-			files[entry.File] = struct{}{}
-		}
-	}
-	s.m.Unlock()
-	for file := range files {
-		l, err := OpenLog(file)
-		if err != nil {
-			return err
-		}
-		err = l.RangeSince(since, func(msg Msg) error {
-			if msg.TS != ts[msg.ID] {
-				return nil // skip older versions of the same ID
-			}
-			return f(msg)
-		})
-		l.Close()
-		if err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (s *Service) handleConnection(conn net.Conn) {
+func (s *Server) handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	// expect GOSSIP<since:int64>
@@ -139,7 +110,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 		log.Printf("Invalid handshake prefix: %q", string(prefix[:]))
 		return
 	}
-	since, err := ReadInt64(conn)
+	since, err := lib.ReadInt64(conn)
 	if err != nil {
 		log.Printf("Error reading handshake ts: %v", err)
 		return
@@ -151,7 +122,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 	}
 	inbox := make(chan Outbound, 100)
 	s.m.Lock()
-	s.Clients[conn.RemoteAddr().String()] = inbox
+	s.clients[conn.RemoteAddr().String()] = inbox
 	s.m.Unlock()
 
 	// spool messages to the client in a separate goroutine
@@ -161,10 +132,9 @@ func (s *Service) handleConnection(conn net.Conn) {
 			conn.Close()
 		}()
 
-		err := s.replay(since, func(msg Msg) error {
+		err := s.G.Replay(since, func(msg lib.Msg) error {
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			_, err := msg.WriteTo(conn, CmdLWW)
-			return err
+			return writeMsg(conn, CmdLWW, msg)
 		})
 		if err != nil {
 			log.Printf("Error replaying messages: %v", err)
@@ -184,7 +154,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 					return
 				}
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				_, err := item.Msg.WriteTo(conn, item.Cmd)
+				err := writeMsg(conn, item.Cmd, item.Msg)
 				if err != nil {
 					log.Printf("Error writing message: %v", err)
 					return
@@ -199,7 +169,7 @@ func (s *Service) handleConnection(conn net.Conn) {
 	defer func() {
 		s.m.Lock()
 		log.Printf("Removing client %s", conn.RemoteAddr().String())
-		delete(s.Clients, conn.RemoteAddr().String())
+		delete(s.clients, conn.RemoteAddr().String())
 		s.m.Unlock()
 		close(inbox) // close the inbox channel to signal the spooler goroutine to exit
 	}()
@@ -212,9 +182,9 @@ func (s *Service) handleConnection(conn net.Conn) {
 		}
 		conn.SetReadDeadline(time.Now().Add(10 * time.Second)) // timeout for the rest of the message after reading the command byte
 		switch cmd[0] {
-		case CmdCAS, CmdLWW:
-			var msg Msg
-			if _, err := msg.Decode(conn, s.MaxData); err != nil {
+		case CmdCAS:
+			msg, err := readMsg(conn, s.MaxData)
+			if err != nil {
 				if errors.Is(err, io.EOF) {
 					log.Printf("Client %s disconnected", conn.RemoteAddr().String())
 				} else {
@@ -224,7 +194,11 @@ func (s *Service) handleConnection(conn net.Conn) {
 				}
 				return
 			}
-			err = s.Add(msg, cmd[0] == CmdCAS)
+			// The store notifies the subscription registered in Init, which is
+			// what puts the accepted message — carrying the timestamp CAS
+			// assigned — in front of every connected peer.
+			err = s.G.PublishCAS(msg.Topic, msg.ID, msg.TS, msg.Data)
+
 			if err != nil {
 				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 				conn.Write([]byte("Error adding message\n"))
@@ -233,8 +207,8 @@ func (s *Service) handleConnection(conn net.Conn) {
 			}
 			log.Printf("Added message: ID=%s, TS=%d, DataSize=%d", msg.ID, msg.TS, len(msg.Data))
 		case CmdSignal:
-			var msg Msg
-			if _, err := msg.Decode(conn, s.MaxData); err != nil {
+			msg, err := readMsg(conn, s.MaxData)
+			if err != nil {
 				if errors.Is(err, io.EOF) {
 					log.Printf("Client %s disconnected", conn.RemoteAddr().String())
 				} else {
@@ -244,12 +218,10 @@ func (s *Service) handleConnection(conn net.Conn) {
 				}
 				return
 			}
-			if err := s.Signal(msg); err != nil {
-				conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-				conn.Write([]byte("Error forwarding signal\n"))
-				log.Printf("Error forwarding signal: %v", err)
-				return
-			}
+			// A signal is not stored, so it never reaches the store at all: the
+			// server forwards it straight to the connected peers.
+			err = s.G.Signal(msg.Topic, msg.ID, msg.TS, msg.Data)
+
 			log.Printf("Forwarded signal: ID=%s, TS=%d, DataSize=%d", msg.ID, msg.TS, len(msg.Data))
 		default:
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))

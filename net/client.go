@@ -1,6 +1,7 @@
-package gossip
+package net
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -10,32 +11,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	gi "github.com/ohait/gossip/internal"
+	"github.com/ohait/gossip/lib"
 )
 
 const (
 	tcpKeepAlivePeriod = 30 * time.Second
 	defaultTimeout     = 10 * time.Second
 )
-
-type Client interface {
-	// Setup the client and reply the history, blocks until the replay is completed
-	Init(func(topic, id string, ts int64, data []byte) error) error
-
-	// PublishLWW broadcasts data and persists it using last write wins
-	PublishLWW(topic, id string, ts_epoch_ns int64, data []byte) error
-
-	// PublishCAS broadcasts data and persists it using compare-and-swap
-	// the ts_epoch_ns is expected to match the old one (or zero for new entries)
-	// the data will then get a new ts_epoch_ns assigned if succeed
-	PublishCAS(topic, id string, ts_epoch_ns int64, data []byte) error
-
-	// Signal broadcasts transient data without persisting it.
-	Signal(topic, id string, ts_epoch_ns int64, data []byte) error
-
-	// Close the client
-	Close() error
-}
 
 type TCPClient struct {
 	m     sync.Mutex
@@ -53,7 +35,11 @@ type TCPClient struct {
 	replayErr chan error
 }
 
-var _ Client = (*TCPClient)(nil)
+func (c *TCPClient) Replay(since int64, f func(lib.Msg) error) error {
+	return errors.New("tcp: reply not supported. Replay is called in init.")
+}
+
+var _ lib.Client = (*TCPClient)(nil)
 
 func (c *TCPClient) Init(cb func(topic, id string, ts int64, data []byte) error) error {
 	if c.done != nil {
@@ -81,6 +67,15 @@ func (c *TCPClient) Init(cb func(topic, id string, ts int64, data []byte) error)
 	}
 	c.Log("initial replay completed")
 	return nil
+}
+
+func (c *TCPClient) PublishCAS(topic, id string, ts int64, data []byte) error {
+	return c.send(CmdCAS, topic, id, ts, data)
+}
+
+// Signal writes transient data to the server with automatic retry on failure.
+func (c *TCPClient) Signal(topic, id string, ts int64, data []byte) error {
+	return c.send(CmdSignal, topic, id, ts, data)
 }
 
 func (c *TCPClient) Close() error {
@@ -136,18 +131,18 @@ func (c *TCPClient) connectAndReceive() error {
 		}
 		conn.SetReadDeadline(time.Now().Add(c.timeout())) // timeout for the rest of the message after reading the command byte
 		switch cmd[0] {
-		case gi.CmdReplyDone:
+		case CmdReplyDone:
 			select {
 			case c.replayErr <- nil:
 			default:
 			}
-		case gi.CmdCAS:
+		case CmdCAS:
 			return fmt.Errorf("server should never send CAS messages")
-		case gi.CmdLWW:
+		case CmdLWW:
 			if err := c.handleIncoming(conn, true); err != nil {
 				return err
 			}
-		case gi.CmdSignal:
+		case CmdSignal:
 			if err := c.handleIncoming(conn, false); err != nil {
 				return err
 			}
@@ -156,11 +151,7 @@ func (c *TCPClient) connectAndReceive() error {
 }
 
 func (c *TCPClient) handleIncoming(conn net.Conn, persist bool) error {
-	var msg gi.Msg
-	if _, err := msg.Decode(conn, 0); err != nil {
-		return err
-	}
-	data, err := gi.DecodePayload(msg.Data)
+	msg, err := readMsg(conn, 0)
 	if err != nil {
 		return err
 	}
@@ -168,7 +159,7 @@ func (c *TCPClient) handleIncoming(conn net.Conn, persist bool) error {
 		c.LastTS = msg.TS // move Since forward only for replayable data
 	}
 	if c.cb != nil {
-		return c.cb(msg.Topic, msg.ID, msg.TS, data)
+		return c.cb(msg.Topic, msg.ID, msg.TS, msg.Data)
 	}
 	return nil
 }
@@ -200,22 +191,22 @@ func (c *TCPClient) connect() (net.Conn, error) {
 		return nil, err
 	}
 	// send GOSSIP<since:int64>
-	if _, err = conn.Write([]byte(gi.HandshakePrefix)); err != nil {
+	if _, err = conn.Write([]byte(HandshakePrefix)); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	// replay 5 seconds before Since, to tollerate races
-	if err = gi.WriteInt64(conn, c.LastTS-int64(c.ReplayMargin)); err != nil {
+	if err = lib.WriteInt64(conn, c.LastTS-int64(c.ReplayMargin)); err != nil {
 		conn.Close()
 		return nil, err
 	}
-	var buf [len(gi.Handshake)]byte
+	var buf [len(Handshake)]byte
 	_, err = io.ReadFull(conn, buf[:])
 	if err != nil {
 		conn.Close()
 		return nil, err
 	}
-	if string(buf[:]) != gi.Handshake {
+	if string(buf[:]) != Handshake {
 		conn.Close()
 		return nil, fmt.Errorf("unexpected handshake response: %q", string(buf[:]))
 	}
@@ -225,21 +216,6 @@ func (c *TCPClient) connect() (net.Conn, error) {
 	}
 	c.Log("Connected to server at %s, replaying messages since %d", c.Addr, c.LastTS)
 	return conn, nil
-}
-
-// PublishLWW writes durable data to the server with automatic retry on failure.
-// TODO: accept a context.Context to allow cancellation during retries.
-func (c *TCPClient) PublishLWW(topic, id string, ts int64, data []byte) error {
-	return c.send(gi.CmdLWW, topic, id, ts, data)
-}
-
-func (c *TCPClient) PublishCAS(topic, id string, ts int64, data []byte) error {
-	return c.send(gi.CmdCAS, topic, id, ts, data)
-}
-
-// Signal writes transient data to the server with automatic retry on failure.
-func (c *TCPClient) Signal(topic, id string, ts int64, data []byte) error {
-	return c.send(gi.CmdSignal, topic, id, ts, data)
 }
 
 func (c *TCPClient) closeConn(conn net.Conn) {
@@ -255,10 +231,6 @@ func (c *TCPClient) send(cmd byte, topic, id string, ts int64, data []byte) erro
 	if c.close.Load() {
 		return os.ErrClosed
 	}
-	data, err := gi.EncodePayload(data)
-	if err != nil {
-		return err
-	}
 	c.m.Lock()
 	defer c.m.Unlock()
 	conn := c.conn
@@ -273,8 +245,8 @@ func (c *TCPClient) send(cmd byte, topic, id string, ts int64, data []byte) erro
 		return err
 	}
 	defer conn.SetWriteDeadline(time.Time{})
-	msg := gi.Msg{Topic: topic, ID: id, TS: ts, Data: data}
-	_, err = msg.WriteTo(conn, cmd)
+	msg := lib.Msg{Topic: topic, ID: id, TS: ts, Data: data}
+	err := writeMsg(conn, cmd, msg)
 	if err != nil && c.conn == conn {
 		c.conn = nil
 		conn.Close()

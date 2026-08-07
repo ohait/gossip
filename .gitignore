@@ -1,4 +1,7 @@
+.idea
 Makefile
 k8s/
 bin/
 .DS_Store
+helper_scripts
+.gocache

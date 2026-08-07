@@ -1,4 +1,4 @@
-package gossip
+package lib
 
 import (
 	"fmt"
@@ -51,6 +51,10 @@ func (c *MockClient) PublishLWW(topic, id string, ts int64, data []byte) error {
 
 func (c *MockClient) Signal(topic, id string, ts int64, data []byte) error {
 	return c.cb(topic, id, ts, data)
+}
+
+func (c *MockClient) Replay(since int64, f func(Msg) error) error {
+	return nil
 }
 
 func (c *MockClient) Close() error {

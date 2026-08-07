@@ -1,4 +1,4 @@
-package gossip
+package lib
 
 import (
 	"bytes"
@@ -9,14 +9,6 @@ import (
 )
 
 const (
-	HandshakePrefix = "GOSSIP"   // 6-byte prefix sent by the client
-	Handshake       = "GOSSIP\n" // 7-byte ack sent by the server
-
-	CmdLWW   = byte('M') // last write wins message command byte
-	CmdCAS       = byte('C') // compare-and-swap command byte
-	CmdSignal    = byte('S') // signal (like a message, but not persisted or replayed)
-	CmdReplyDone = byte('D')
-
 	PayloadEncodingRaw  = byte('=') // payload is stored as-is
 	PayloadEncodingZlib = byte('z') // payload is zlib-compressed
 )
