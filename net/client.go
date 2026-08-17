@@ -30,7 +30,7 @@ type TCPClient struct {
 	Timeout      time.Duration // per network operation and idle read timeout; default 10s
 	ReplayMargin time.Duration // replay messages starting from LastTS-ReplayMargin; default 5s
 	LastTS       int64         // nanoseconds epoch: server will replay all messages with TS > Since - ReplayMargin
-	cb           func(topic, id string, ts int64, data []byte) error
+	cb           func(topic, id string, ts int64, data []byte, persist bool) error
 
 	replayErr chan error
 }
@@ -41,7 +41,7 @@ func (c *TCPClient) Replay(since int64, f func(lib.Msg) error) error {
 
 var _ lib.Client = (*TCPClient)(nil)
 
-func (c *TCPClient) Init(cb func(topic, id string, ts int64, data []byte) error) error {
+func (c *TCPClient) Init(cb func(topic, id string, ts int64, data []byte, persist bool) error) error {
 	if c.done != nil {
 		return fmt.Errorf("client already initialized")
 	}
@@ -138,7 +138,7 @@ func (c *TCPClient) connectAndReceive() error {
 			}
 		case CmdCAS:
 			return fmt.Errorf("server should never send CAS messages")
-		case CmdLWW:
+		case CmdCommit:
 			if err := c.handleIncoming(conn, true); err != nil {
 				return err
 			}
@@ -159,7 +159,7 @@ func (c *TCPClient) handleIncoming(conn net.Conn, persist bool) error {
 		c.LastTS = msg.TS // move Since forward only for replayable data
 	}
 	if c.cb != nil {
-		return c.cb(msg.Topic, msg.ID, msg.TS, msg.Data)
+		return c.cb(msg.Topic, msg.ID, msg.TS, msg.Data, persist)
 	}
 	return nil
 }

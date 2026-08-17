@@ -10,10 +10,10 @@ const (
 	HandshakePrefix = "GOSSIP"   // 6-byte prefix sent by the client
 	Handshake       = "GOSSIP\n" // 7-byte ack sent by the server
 
-	CmdLWW       = byte('M') // last write wins message command byte
-	CmdCAS       = byte('C') // compare-and-swap command byte
-	CmdSignal    = byte('S') // signal (like a message, but not persisted or replayed)
-	CmdReplyDone = byte('D')
+	CmdCommit    = byte('M') // server -> client: a durable message, from replay or a live broadcast
+	CmdCAS       = byte('C') // client -> server: write with compare-and-swap semantics
+	CmdSignal    = byte('S') // either direction: transient, never persisted or replayed
+	CmdReplyDone = byte('D') // server -> client: marks the end of the initial replay
 )
 
 func writeMsg(w io.Writer, cmd byte, m lib.Msg) error {

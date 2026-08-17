@@ -36,8 +36,12 @@ func (s *Server) Init() error {
 	s.clients = make(map[string]chan<- Outbound)
 	s.m.Unlock()
 
-	return s.G.Init(func(topic, id string, ts int64, data []byte) error {
-		s.broadcast(CmdLWW, lib.Msg{Topic: topic, ID: id, TS: ts, Data: data})
+	return s.G.Init(func(topic, id string, ts int64, data []byte, persist bool) error {
+		cmd := byte(CmdSignal)
+		if persist {
+			cmd = CmdCommit
+		}
+		s.broadcast(cmd, lib.Msg{Topic: topic, ID: id, TS: ts, Data: data})
 		return nil
 	})
 }
@@ -134,7 +138,7 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 		err := s.G.Replay(since, func(msg lib.Msg) error {
 			conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			return writeMsg(conn, CmdLWW, msg)
+			return writeMsg(conn, CmdCommit, msg)
 		})
 		if err != nil {
 			log.Printf("Error replaying messages: %v", err)

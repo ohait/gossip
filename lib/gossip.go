@@ -27,7 +27,7 @@ type Gossip struct {
 	m     sync.Mutex
 	index map[string]IndexEntry
 	log   *Log // current append target; nil until the first append
-	cb    func(topic, id string, ts int64, data []byte) error
+	cb    func(topic, id string, ts int64, data []byte, persist bool) error
 }
 
 var _ Client = (*Gossip)(nil)
@@ -38,7 +38,9 @@ type IndexEntry struct {
 	Offset int64
 }
 
-func (g *Gossip) Init(cb func(topic, id string, ts int64, data []byte) error) error {
+// cb's persist argument tells the caller whether this message came from a
+// durable PublishCAS commit (true) or a transient Signal (false).
+func (g *Gossip) Init(cb func(topic, id string, ts int64, data []byte, persist bool) error) error {
 	if err := g.buildIndex(); err != nil {
 		return err
 	}
@@ -69,7 +71,7 @@ func (g *Gossip) PublishCAS(topic, id string, ts int64, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return g.notify(committed)
+	return g.notify(committed, true)
 }
 
 func (g *Gossip) Signal(topic, id string, ts int64, data []byte) error {
@@ -81,7 +83,7 @@ func (g *Gossip) Signal(topic, id string, ts int64, data []byte) error {
 	if err := validateFields(msg); err != nil {
 		return err
 	}
-	return g.notify(msg)
+	return g.notify(msg, false)
 }
 
 func (g *Gossip) Replay(since int64, f func(Msg) error) error {
@@ -215,12 +217,12 @@ func (g *Gossip) commit(msg Msg) error {
 	return nil
 }
 
-func (g *Gossip) notify(msg Msg) error {
+func (g *Gossip) notify(msg Msg, persist bool) error {
 	if g.cb == nil {
 		return nil
 	}
 
-	return g.cb(msg.Topic, msg.ID, msg.TS, msg.Data)
+	return g.cb(msg.Topic, msg.ID, msg.TS, msg.Data, persist)
 }
 
 func (g *Gossip) compact() error {
