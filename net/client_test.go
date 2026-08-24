@@ -165,10 +165,11 @@ func TestClientSendErrorClearsConnection(t *testing.T) {
 	}
 }
 
-// TestClientIdleReadTimeoutReturns drives the handshake by hand and verifies
-// connectAndReceive() returns a timeout error, and clears c.conn, once the
-// server goes idle without sending anything more.
-func TestClientIdleReadTimeoutReturns(t *testing.T) {
+// TestClientSurvivesIdlePeriod drives the handshake by hand and verifies
+// connectAndReceive() stays connected through a gap between messages longer
+// than the configured Timeout: idle time between messages must not be
+// mistaken for a dead connection.
+func TestClientSurvivesIdlePeriod(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -214,17 +215,22 @@ func TestClientIdleReadTimeoutReturns(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Wait well beyond cli.Timeout with no further traffic; connectAndReceive
+	// must still be running, not have errored out from an idle read timeout.
 	select {
 	case err := <-done:
-		var netErr net.Error
-		if !errors.As(err, &netErr) || !netErr.Timeout() {
-			t.Fatalf("connectAndReceive() error = %v, want timeout", err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("connectAndReceive() did not return after idle read timeout")
+		t.Fatalf("connectAndReceive() returned during idle period: %v", err)
+	case <-time.After(10 * cli.Timeout):
 	}
-	if cli.conn != nil {
-		t.Fatal("connectAndReceive() left timed out connection installed")
+	if cli.conn == nil {
+		t.Fatal("connection was dropped during idle period")
+	}
+
+	conn.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("connectAndReceive() did not return after connection closed")
 	}
 }
 

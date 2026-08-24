@@ -124,7 +124,7 @@ func (c *TCPClient) connectAndReceive() error {
 	defer c.closeConn(conn)
 	var cmd [1]byte
 	for {
-		conn.SetReadDeadline(time.Now().Add(c.timeout())) // idle timeout to detect dead connections
+		conn.SetReadDeadline(time.Time{}) // no timeout between messages; dead peers are caught by TCP keep-alive
 		_, err := io.ReadFull(conn, cmd[:])
 		if err != nil {
 			return err
